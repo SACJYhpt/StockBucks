@@ -3,7 +3,44 @@ package com.stockbucks;
 import java.util.HashMap;
 
 public class User {
-    // 使用者資料
-    private double balance;
-    private HashMap <String, Integer> holdings;
+    // 帳戶資料
+    private double cash = 1200000;
+    private HashMap <String, StockHoldings> holdings = new HashMap<>();
+    
+    public void updateHoldings(String stockID, int amount, double price) {
+        double cost = amount*price;
+
+        if (!holdings.containsKey(stockID)) {
+            holdings.put(stockID, new StockHoldings(stockID, amount, cost));
+        }
+        else {
+            holdings.get(stockID).updateHoldings(amount, cost);
+        }
+    }
+
+    public double getOnePresentValue(String stockID, double currentPrice) {
+        StockHoldings data = holdings.get(stockID);
+        if (data == null) return 0;
+        return data.getQuantity()*currentPrice;
+    }
+
+    public double getOneNetWorth(String stockID, double currentPrice) {
+        StockHoldings data = holdings.get(stockID);
+        if (data == null) return 0;
+        return data.getQuantity()*currentPrice-data.getTotalCost();
+    }
+
+    public double getCash() {
+        return cash;
+    }
+
+    public void addCash(double amount) {
+        this.cash += amount;
+    }
+
+    public int getStockQuantity(String stockID) {
+        StockHoldings data = holdings.get(stockID);
+        if (data == null) return 0;
+        return data.getQuantity();
+    }
 }
