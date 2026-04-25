@@ -42,12 +42,12 @@ public class TradingEngine {
         int totalHoldings = user.getStockQuantity(stockID);
         int todayOdds = todayOddsShares.getOrDefault(stockID, 0);
 
-        if (shares < totalHoldings-todayOdds) {
-            System.out.println("交易失敗 零股無法當沖");
+        if (shares > user.getStockQuantity(stockID)) {
+            System.out.println("持有庫存不足");
             return;
         }
-        else if (shares > user.getStockQuantity(stockID)) {
-            System.out.println("持有庫存不足");
+        else if (shares > totalHoldings-todayOdds) {
+            System.out.println("交易失敗 零股無法當沖");
             return;
         }
 
