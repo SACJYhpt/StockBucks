@@ -27,7 +27,7 @@ public class TradingEngine {
             System.out.println("本金不足 請留意違約交割風險");
         }
         user.addCash(totalCost*-1);
-        user.updateHoldings(stockID, shares, totalCost);
+        user.stockBuying(stockID, shares, totalCost);
 
         if (shares < 1000) {
             todayOddsShares.put(stockID, todayOddsShares.getOrDefault(stockID, 0)+shares);
@@ -52,7 +52,7 @@ public class TradingEngine {
         }
 
         user.addCash(totalCost);
-        user.updateHoldings(stockID, shares*-1, totalCost*-1);
+        user.stockSelling(stockID, shares);
 
         String record = String.format("賣出 %s: %.2f元共%d股, 總共%.2f元", stockID, price, shares, totalCost);
         dailyRecords.add(record);

@@ -7,13 +7,25 @@ public class User {
     private double cash = 1200000;
     private HashMap <String, StockHoldings> holdings = new HashMap<>();
     
-    public void updateHoldings(String stockID, int amount, double cost) {
+    public void stockBuying(String stockID, int amount, double cost) {
         if (!holdings.containsKey(stockID)) {
             holdings.put(stockID, new StockHoldings(stockID, amount, cost));
         }
         else {
-            holdings.get(stockID).updateHoldings(amount, cost);
+            holdings.get(stockID).updateAdd(amount, cost);
         }
+    }
+
+    public double stockSelling(String stockID, int amount) {
+        if (holdings.containsKey(stockID)) {
+            StockHoldings data = holdings.get(stockID);
+            double cost = data.updateRemove(amount);
+            if (data.getQuantity() == 0) {
+                holdings.remove(stockID);
+            }
+            return cost;
+        }
+        return 0;
     }
 
     public double getOneTotalCost(String stockID) {
