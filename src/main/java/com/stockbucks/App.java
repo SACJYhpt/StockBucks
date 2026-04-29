@@ -11,13 +11,13 @@ public class App {
         System.out.println("-------------------");
 
         System.out.println("\n買入500股台積電: ");
-        tradeTest.trading(me, TSMCID, 500, 600.0, true);
+        tradeTest.trading(me, TSMCID, "2026/04/29", 500, 600.0, true);
 
         System.out.println("\n當天賣出100股台積電");
-        tradeTest.trading(me, TSMCID, 100, 610, false);
+        tradeTest.trading(me, TSMCID, "2026/04/29", 100, 610, false);
 
         System.err.println("\n買入超額股票");
-        tradeTest.trading(me, TSMCID, 3000, 800, true);
+        tradeTest.trading(me, TSMCID, "2026/04/29", 3000, 800, true);
 
         System.out.println("\n   ===結算===   ");
         double currentTSMCPrice = 620.0;
@@ -29,8 +29,8 @@ public class App {
         System.out.println("預計損益: "+me.getOneNetWorth(TSMCID, currentTSMCPrice));
 
         System.err.println("\n   ===交易清單===   ");
-        for (String record: tradeTest.getDailyRecords()) {
-            System.out.println(record);
+        for (TradeRecord record: tradeTest.getDailyRecords()) {
+            System.out.println(record.toString());
         }
     }
 }

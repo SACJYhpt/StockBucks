@@ -6,6 +6,7 @@ public class User {
     // 帳戶資料
     private double cash = 1200000;
     private HashMap <String, StockHoldings> holdings = new HashMap<>();
+    private SettlementManager settlement = new SettlementManager();
     
     public void stockBuying(String stockID, int amount, double cost) {
         if (!holdings.containsKey(stockID)) {
@@ -58,11 +59,18 @@ public class User {
 
     public void addCash(double amount) {
         this.cash += amount;
+        if (this.cash < 0) {
+            System.out.println("違約交割，信用破產");
+        }
     }
 
     public int getStockQuantity(String stockID) {
         StockHoldings data = holdings.get(stockID);
         if (data == null) return 0;
         return data.getQuantity();
+    }
+
+    public SettlementManager getSettlementManager() {
+        return settlement;
     }
 }
