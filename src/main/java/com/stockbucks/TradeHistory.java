@@ -3,7 +3,7 @@ package com.stockbucks;
 import java.util.ArrayList;
 import java.util.List;
 
-public class TradeHistory {
+public class TradeHistory { //預計刪掉檔案
     private List <TradingEngine> logs = new ArrayList<>();
 
     public void addRecord(TradingEngine record) {

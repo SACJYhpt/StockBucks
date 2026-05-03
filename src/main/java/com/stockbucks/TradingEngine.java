@@ -82,6 +82,6 @@ public class TradingEngine {
     }
 
     public String getDateTplus2(String date) {
-        return ""; //TODO 回傳T+2日期
+        return ""; //TODO 回傳T+2日期 //TODO 寫出額度限制
     }
 }

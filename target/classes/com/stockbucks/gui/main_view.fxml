@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.control.TableView?>
+<?import javafx.scene.layout.VBox?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.Button?>
+
+<VBox spacing="10" alignment="CENTER" xmlns="http://javafx.com/javafx/8" xmlns:fx="http://javafx.com/fxml/1" 
+      fx:controller="com.stockbucks.gui.MainController" stylesheets="@../../../../style.css">
+    
+    <Label text="歷史交易紀錄" style="-fx-font-size: 20px; -fx-font-weight: bold;"/>
+    
+    <Button text="測試新增資料" onAction="#handleTestAdd"/>
+
+    <TableView fx:id="historyTable" VBox.vgrow="ALWAYS">
+        
+    </TableView>
+
+    <Label fx:id="currentPriceLabel" text="等待開盤..." style="-fx-font-size: 30px; -fx-text-fill: red;"/>
+
+    <Button text="開始模擬" onAction="#handleStartSimulation"/>
+    
+</VBox>

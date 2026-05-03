@@ -25,4 +25,36 @@ public class TradeRecord {
     public String toString() {
         return String.format("%s，%s代號 %s: 成交價 %.2f 元共 %d 股，手續費 %d 元，證交稅 %d 元，總共%.2f元", date, type, stockID, price, shares, commission, tax, totalCost);
     }
+
+    public String getStockID() {
+        return stockID;
+    }
+
+    public String getDate() {
+        return date;
+    }
+
+    public String getType() {
+        return type;
+    }
+
+    public double getPrice() {
+        return price;
+    }
+
+    public int getShares() {
+        return shares;
+    }
+
+    public double getCommission() {
+        return commission;
+    }
+
+    public double getTax() {
+        return tax;
+    }
+
+    public double getTotalCost() {
+        return totalCost;
+    }
 }
