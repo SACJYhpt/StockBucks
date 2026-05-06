@@ -33,6 +33,12 @@ public class MainApp extends Application {
     private ObservableList<TradeRecord> observableRecords = FXCollections.observableArrayList();
     private Label currentPriceLabel = new Label("當前市價: --");
     
+    // 資產與交易輸入相關
+    private double balance = 1000000.0;
+    private int inventory = 0;
+    private Label infoLabel = new Label("餘額: $1,000,000 | 持股: 0 股");
+    private TextField sharesField = new TextField("1000"); // 股數輸入框
+
     private XYChart.Series<Number, Number> priceSeries = new XYChart.Series<>();
     private int tickCount = 0;
 
@@ -74,12 +80,25 @@ public class MainApp extends Application {
         startBtn.getStyleClass().add(Styles.ACCENT);
         startBtn.setOnAction(e -> handleStartSimulation());
 
-        // 買入按鈕
+        // 股數輸入框樣式與限制
+        sharesField.setPrefWidth(100);
+        sharesField.setPromptText("輸入股數");
+        sharesField.textProperty().addListener((obs, oldVal, newVal) -> {
+            if (!newVal.matches("\\d*")) {
+                sharesField.setText(newVal.replaceAll("[^\\d]", ""));
+            }
+        });
+
         Button buyBtn = new Button("買入");
         buyBtn.getStyleClass().addAll(Styles.SUCCESS, Styles.BUTTON_OUTLINED);
-        buyBtn.setOnAction(e -> handleBuyAction());
+        buyBtn.setOnAction(e -> handleTrade(true));
+
+        Button sellBtn = new Button("賣出");
+        sellBtn.getStyleClass().addAll(Styles.DANGER, Styles.BUTTON_OUTLINED);
+        sellBtn.setOnAction(e -> handleTrade(false));
 
         currentPriceLabel.getStyleClass().add(Styles.TITLE_3);
+        infoLabel.getStyleClass().add(Styles.TEXT_BOLD);
 
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -92,8 +111,8 @@ public class MainApp extends Application {
             System.exit(0);
         });
 
-        // 重新排列：開始 -> 買入 -> 價格 -> 空白 -> 關閉
-        topBar.getChildren().addAll(startBtn, buyBtn, currentPriceLabel, spacer, closeBtn);
+        // 排版：開始 -> 股數欄 -> 買 -> 賣 -> 價格 -> 空白 -> 資訊 -> 關閉
+        topBar.getChildren().addAll(startBtn, new Label("股數:"), sharesField, buyBtn, sellBtn, currentPriceLabel, spacer, infoLabel, closeBtn);
 
         VBox centerBox = new VBox(15);
         LineChart<Number, Number> lineChart = createPriceChart();
@@ -106,36 +125,67 @@ public class MainApp extends Application {
         root.setCenter(centerBox);
 
         stage.initStyle(StageStyle.UNDECORATED);
-        Scene scene = new Scene(root, 1000, 700);
+        Scene scene = new Scene(root, 1100, 750);
         scene.setFill(null); 
         stage.setScene(scene);
         stage.show();
     }
 
-    private void handleBuyAction() {
+    private void handleTrade(boolean isBuy) {
         if (currentPriceLabel.getText().contains("--")) return;
 
         try {
+            // 從輸入框讀取股數，若為空或 0 則不執行
+            String sharesText = sharesField.getText();
+            if (sharesText.isEmpty()) return;
+            int shares = Integer.parseInt(sharesText);
+            if (shares <= 0) return;
+
             double price = Double.parseDouble(currentPriceLabel.getText().replace("當前市價: ", ""));
             String date = (historyData != null && dayIndex < historyData.size()) 
                           ? historyData.get(dayIndex).getDate() : "2024-01-01";
             
-            // 修正：必須傳入 TradeRecord 要求的所有 8 個參數
-            TradeRecord record = new TradeRecord(
-                "STOCK001", // stockID
-                date,       // date
-                "買入",      // type
-                price,      // price
-                1000,       // shares
-                20.0,       // commission (假設)
-                0.0,        // tax (買入免稅)
-                (price * 1000) + 20 // totalCost
-            );
+            double amount = price * shares;
+            double commission = Math.max(20, Math.floor(amount * 0.001425)); 
             
-            observableRecords.add(record);
+            if (isBuy) {
+                double totalCost = amount + commission;
+                if (balance >= totalCost) {
+                    balance -= totalCost;
+                    inventory += shares;
+                    observableRecords.add(new TradeRecord("STOCK001", date, "買入", price, shares, commission, 0.0, totalCost));
+                } else {
+                    showWarning("餘額不足！");
+                }
+            } else {
+                if (inventory >= shares) {
+                    double tax = Math.floor(amount * 0.003); 
+                    double totalIncome = amount - commission - tax;
+                    balance += totalIncome;
+                    inventory -= shares;
+                    observableRecords.add(new TradeRecord("STOCK001", date, "賣出", price, shares, commission, tax, totalIncome));
+                } else {
+                    showWarning("持股不足！");
+                }
+            }
+            updateInfoLabel();
+        } catch (NumberFormatException ex) {
+            showWarning("股數格式錯誤");
         } catch (Exception ex) {
             ex.printStackTrace();
         }
+    }
+
+    private void updateInfoLabel() {
+        infoLabel.setText(String.format("餘額: $%,.0f | 持股: %d 股", balance, inventory));
+    }
+
+    private void showWarning(String msg) {
+        // 為了讓使用者看到警告，簡單使用彈窗
+        Alert alert = new Alert(Alert.AlertType.WARNING);
+        alert.setHeaderText(null);
+        alert.setContentText(msg);
+        alert.showAndWait();
     }
 
     private LineChart<Number, Number> createPriceChart() {
@@ -154,20 +204,19 @@ public class MainApp extends Application {
     }
 
     private void setupTable() {
-        // 確保 PropertyValueFactory 的字串與 TradeRecord 裡的變數名稱完全對應
         TableColumn<TradeRecord, String> dateCol = new TableColumn<>("日期");
         dateCol.setCellValueFactory(new PropertyValueFactory<>("date"));
         
         TableColumn<TradeRecord, String> typeCol = new TableColumn<>("類型");
         typeCol.setCellValueFactory(new PropertyValueFactory<>("type"));
 
-        TableColumn<TradeRecord, Double> priceCol = new TableColumn<>("成交價格");
+        TableColumn<TradeRecord, Double> priceCol = new TableColumn<>("成交價");
         priceCol.setCellValueFactory(new PropertyValueFactory<>("price"));
 
         TableColumn<TradeRecord, Integer> sharesCol = new TableColumn<>("股數");
         sharesCol.setCellValueFactory(new PropertyValueFactory<>("shares"));
 
-        TableColumn<TradeRecord, Double> costCol = new TableColumn<>("總金額");
+        TableColumn<TradeRecord, Double> costCol = new TableColumn<>("淨收支");
         costCol.setCellValueFactory(new PropertyValueFactory<>("totalCost"));
 
         historyTable.getColumns().addAll(dateCol, typeCol, priceCol, sharesCol, costCol);
