@@ -10,8 +10,29 @@ public class TradingEngine {
     // 追蹤今日零股 零股無法當沖
     private HashMap <String, Integer> todayOddsShares = new HashMap<>();
 
+    private List <String> globalCalender;
+    private String currentDate = "";
+
+    public TradingEngine(List <String> globalCalender) {
+        this.globalCalender = globalCalender;
+    }
+
     // isBuy: 0: sell, 1: buy
     public void trading(User user,String stockId, String date, int shares, double price, boolean isBuy) {
+        date = date.contains(" ") ? date.split(" ")[0] : date;
+        if (currentDate.isEmpty()) {
+            currentDate = date;
+            user.getSettlementManager().SettlementClearing(date, user);
+        }
+        if (date.compareTo(currentDate) > 0) {
+            currentDate = date;
+            todayOddsShares.clear();
+            user.getSettlementManager().SettlementClearing(date, user);
+        }
+        else if (date.compareTo(date) < 0) {
+            System.out.println("引擎時間: " + currentDate + "，傳入時間: " + date);
+        }
+        
         double totalCost = shares*price;
 
         if (isBuy) {
@@ -82,6 +103,15 @@ public class TradingEngine {
     }
 
     public String getDateTplus2(String date) {
-        return ""; //TODO 回傳T+2日期 //TODO 寫出額度限制
+        String pureDate = date.contains(" ") ? date.split(" ")[0] : date;
+        int currentIndex = globalCalender.indexOf(pureDate);
+        if (currentIndex == -1) {
+            System.err.println("找不到交易日: "+pureDate);
+            return pureDate;
+        }
+        if (currentIndex+2 >= globalCalender.size()) {
+            return globalCalender.get(globalCalender.size()-1);
+        }
+        return globalCalender.get(currentIndex+2);
     }
 }

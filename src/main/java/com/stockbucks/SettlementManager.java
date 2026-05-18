@@ -2,6 +2,7 @@ package com.stockbucks;
 
 import java.util.LinkedList;
 import java.util.Queue;
+import java.util.Iterator;
 
 public class SettlementManager {
     private Queue <Settlement> q = new LinkedList<>();
@@ -21,11 +22,14 @@ public class SettlementManager {
     }
 
     public void SettlementClearing(String today, User user) {
-        while(!q.isEmpty() && q.peek().date.equals(today)) {
-            Settlement set = q.poll();
-            user.addCash(set.price);
-            System.out.println(set.date+"交割金額："+set.price);
+        Iterator <Settlement> iterator = q.iterator();
+        while(iterator.hasNext()) {
+            Settlement set = iterator.next();
+            if (set.date.compareTo(today) <= 0) {
+                user.addCash(set.price);
+                System.out.println(set.date+"交割金額："+set.price);
+                iterator.remove();
+            }
         }
     }
-
 }
