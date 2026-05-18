@@ -4,8 +4,11 @@ import com.stockbucks.StockData;
 import com.stockbucks.TradeRecord;
 import com.stockbucks.CsvLoading;
 import com.stockbucks.PriceSimulator;
+import com.stockbucks.User;
+import com.stockbucks.TradingEngine;
 
 import java.util.List;
+import java.util.ArrayList;
 import javafx.util.Duration;
 import javafx.animation.Animation;
 import javafx.animation.KeyFrame;
@@ -30,9 +33,21 @@ public class MainController {
     private CsvLoading csvLoader = new CsvLoading();
     private PriceSimulator simulator = new PriceSimulator();
 
-    private List <StockData> historyData;
+    private User user;
+    private TradingEngine tradingEngine;
+
+    private List <StockData> historyData = new ArrayList<>();
     private int dayIndex = 0;
     private Timeline timeline;
+
+    public void initBackend(User user, TradingEngine tradingEngine) {
+        this.user = user;
+        this.tradingEngine = tradingEngine;
+        this.historyData.clear();
+        csvLoader.streamStockData("TestDataTSMC", data -> {
+            historyData.add(data);
+        });
+    }
 
     @FXML
     private void handleTestAdd() {
@@ -75,7 +90,6 @@ public class MainController {
         historyTable.getColumns().add(taxCol);
         historyTable.getColumns().add(totalCostCol);
 
-        historyData = csvLoader.loadDate();
         historyTable.setItems(observableRecords);
     }
 
@@ -94,6 +108,10 @@ public class MainController {
         double yesterdayClose = (dayIndex == 0) ? today.getOpen() : historyData.get(dayIndex-1).getClose();
 
         simulator.generateDayPath(today, yesterdayClose);
+
+        if (timeline != null) {
+            timeline.stop();
+        }
 
         timeline = new Timeline(new KeyFrame(Duration.millis(500), e -> {
             double currentPrice = simulator.getNextPrice();

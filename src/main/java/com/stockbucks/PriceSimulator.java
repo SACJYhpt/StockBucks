@@ -54,30 +54,97 @@ public class PriceSimulator {
         double limitUp = calculateLimitPrice(yesterdayClose, true);
         double limitDown = calculateLimitPrice(yesterdayClose, false);
 
-        int totalTime = 270; // 09:00 - 13:30;
+        int totalTime = 270; // 09:00 - 13:30， 早盤 10:30 午盤 12:30 晚盤
+        int firstTime = random.nextInt(90) + 20;
+        int secondTime = random.nextInt(80) + 150;
+        int highTime = 0;
+        int lowTime = 0;
+        boolean wash = random.nextDouble() < 0.30;
+        double priceDiff = close - open;
+        double threshold = yesterdayClose*0.005; // 0.5%內算平盤
+
+        if (priceDiff > threshold) {
+            if (wash) { // 先噴高，後殺低，再拉高
+                highTime = firstTime;
+                lowTime = secondTime;
+            }
+            else { // 整體漲，先探底後拉高
+                lowTime = firstTime;
+                highTime = secondTime;
+            }
+        }
+        else if (priceDiff < threshold*-1) {
+            if (wash) { // 先探底，後拉高，再殺低
+                lowTime = firstTime;
+                highTime = secondTime;
+            }
+            else { // 整體跌，先噴高後殺低
+                highTime = firstTime;
+                lowTime = secondTime;
+            }
+        }
+        else {
+            // 平盤，隨機
+            if (random.nextBoolean()) {
+                highTime = firstTime;
+                lowTime = secondTime;
+            }
+            else {
+                lowTime = firstTime;
+                highTime = secondTime;
+            }
+        }
+
+        int firstTargetTime = Math.min(highTime, lowTime);
+        double firstTargetPrice = (highTime < lowTime) ? high : low;
+        int secondTargetTime = Math.max(highTime, lowTime);
+        double secondTargetPrice = (highTime > lowTime) ? high : low;
+        double momentum = 0.0; // 動能因子
+
         double currentPrice = open;
         dayPath.add(currentPrice);
 
         for (int i=1; i<=totalTime; i++) {
-            double tick = getTickChangeSize(currentPrice);
-            double progress = (double) i/totalTime;
-
-            if (close == high && currentPrice >= high) {
-                if (random.nextDouble() < 0.96) {
-                    dayPath.add(currentPrice);
-                    continue;
-                }
+            if (i == 270 || (high == low && low == open && open == close)) {
+                dayPath.add(close);
+                continue;
             }
-            else if (close == low && currentPrice <= low) {
-                if (random.nextDouble() < 0.96) {
-                    dayPath.add(currentPrice);
-                    continue;
-                }
+            double targetPrice;
+            int targetTime;
+            if (i <= firstTargetTime) {
+                targetPrice = firstTargetPrice;
+                targetTime = firstTargetTime;
+            }
+            else if (i <= secondTargetTime) {
+                targetPrice = secondTargetPrice;
+                targetTime = secondTargetTime;
+            }
+            else {
+                targetPrice = close;
+                targetTime = totalTime - 5;
+            }
+
+            double volatility = 1.0;
+            if (i <= 60 || i >= 240) {
+                volatility = 3.6; // 09:00 - 10:00、13:00 - 13:30 波動較大
             }
 
             double baseProbability = 0.5;
-            double bias = (close > currentPrice) ? 0.27 : -0.27;
-            double upProbability = baseProbability+(bias*progress);
+            int tickLeft = targetTime - i;
+            if (tickLeft > 0) {
+                double priceGap = targetPrice - currentPrice;
+                double needTick = priceGap/getTickChangeSize(currentPrice);
+                double pullForce = (needTick/tickLeft)*0.15;
+                baseProbability += pullForce;
+            }
+            if (targetPrice > currentPrice) {
+                baseProbability += 0.02;
+            }
+            else {
+                baseProbability -= 0.02;
+            }
+            double upProbability = baseProbability+momentum;
+            upProbability = Math.max(0.01, Math.min(0.99, upProbability));
             
             if (currentPrice >= limitUp || currentPrice >= high) {
                 upProbability = 0.0;
@@ -86,19 +153,52 @@ public class PriceSimulator {
                 upProbability = 1.0;
             }
             
+            boolean isUp = false;
+            boolean isDown = false;
+            if (random.nextDouble() > 0.15) {
+                isUp = random.nextDouble() < upProbability;
+                isDown = !isUp;
+            }
 
-            if (random.nextDouble() < upProbability) {
-                currentPrice += tick;
+            int moveTick = 1;
+            if (volatility > 1.0) {
+                moveTick = (int)(random.nextDouble()*volatility)+1;
+            }
+
+            for (int t=0; t<moveTick; t++) {
+                double tick = getTickChangeSize(currentPrice);
+                if (isUp) {
+                    currentPrice += tick;
+                    if (currentPrice > high) {
+                        currentPrice = high;
+                        break;
+                    }
+                }
+                else if (isDown) {
+                    currentPrice -= tick;
+                    if (currentPrice < low) {
+                        currentPrice = low;
+                        break;
+                    }
+                }
+            }
+
+            if (isUp) {
+                momentum = Math.min(momentum + 0.05, 0.15);
+            }
+            else if (isDown) {
+                momentum = Math.max(momentum - 0.05, 0.15*-1);
             }
             else {
-                currentPrice -= tick;
+                momentum *= 0.66;
             }
 
+            // if (i == firstTargetTime) currentPrice = firstTargetPrice;
+            // if (i == secondTargetTime) currentPrice = secondTargetPrice;
+            // if (i == totalTime) currentPrice = close;
             currentPrice = Math.round(currentPrice*100.0)/100.0;
             dayPath.add(currentPrice);
         }
-
-        dayPath.set(dayPath.size()-1, close);
     }
 
     public double getNextPrice() {

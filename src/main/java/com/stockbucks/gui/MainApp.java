@@ -24,11 +24,12 @@ import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.util.Duration;
 import java.util.List;
+import java.util.ArrayList;
 
 public class MainApp extends Application {
 
     private User user = new User();
-    private TradingEngine tradingEngine = new TradingEngine();
+    private TradingEngine tradingEngine;
     private CsvLoading csvLoader = new CsvLoading();
     private PriceSimulator simulator = new PriceSimulator();
     
@@ -42,7 +43,7 @@ public class MainApp extends Application {
     private XYChart.Series<Number, Number> priceSeries = new XYChart.Series<>();
     private int tickCount = 0;
 
-    private List<StockData> historyData;
+    private List<StockData> historyData = new ArrayList<>();
     private int dayIndex = 0;
     private Timeline timeline;
     private double xOffset = 0;
@@ -51,7 +52,14 @@ public class MainApp extends Application {
     @Override
     public void start(Stage stage) {
         Application.setUserAgentStylesheet(new PrimerDark().getUserAgentStylesheet());
-        historyData = csvLoader.loadDate();
+        
+        List <String> globalCanlendar = csvLoader.loadGlobalCanlendar("TestDataTSMC");
+        this.tradingEngine = new TradingEngine(globalCanlendar);
+
+        csvLoader.streamStockData("TestDataTSMC", data -> {
+            historyData.add(data);
+        });
+        
         setupTable();
         updateInfoLabel();
 
@@ -135,7 +143,7 @@ public class MainApp extends Application {
             double price = Double.parseDouble(currentPriceLabel.getText().replace("當前市價: ", ""));
             String date = (historyData != null && dayIndex < historyData.size()) ? historyData.get(dayIndex).getDate() : "2024-01-01";
 
-            tradingEngine.trading(user, "STOCK001", date, shares, price, isBuy);
+            tradingEngine.trading(user, "TestDataTSMC", date, shares, price, isBuy);
             
             List<TradeRecord> records = tradingEngine.getDailyRecords();
             if (!records.isEmpty()) {
@@ -146,13 +154,14 @@ public class MainApp extends Application {
             }
             updateInfoLabel();
         } catch (Exception ex) {
+            ex.printStackTrace();
             showWarning("交易執行失敗");
         }
     }
 
     private void updateInfoLabel() {
         infoLabel.setText(String.format("可用現金: $%,.0f | 庫存: %d 股", 
-            user.getCash(), user.getStockQuantity("STOCK001")));
+            user.getCash(), user.getStockQuantity("TestDataTSMC")));
     }
 
     @SuppressWarnings("unchecked")
