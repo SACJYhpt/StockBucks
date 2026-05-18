@@ -210,3 +210,5 @@ public class MainApp extends Application {
         launch(args);
     }
 }
+//cd "C:\Users\wwumi\Documents\GitHub\StockBucks"
+//mvn clean javafx:run
