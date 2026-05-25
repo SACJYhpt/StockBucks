@@ -1,6 +1,7 @@
 package com.stockbucks;
-
-public class TradeRecord {
+import java.io.Serializable;
+public class TradeRecord implements Serializable {
+    private static final long serialVersionUID = 1L;
     private String stockID;
     private String date;
     private String type;

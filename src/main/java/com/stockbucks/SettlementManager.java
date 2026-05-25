@@ -1,13 +1,15 @@
 package com.stockbucks;
-
+import java.io.Serializable;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.Iterator;
 
-public class SettlementManager {
+public class SettlementManager implements Serializable {
+    private static final long serialVersionUID = 1L;
     private Queue <Settlement> q = new LinkedList<>();
 
-    public static class Settlement {
+    public static class Settlement implements java.io.Serializable {
+        private static final long serialVersionUID = 1L;
         private String date;
         private double price;
 

@@ -1,12 +1,14 @@
 package com.stockbucks;
-
+import java.io.Serializable;
 import java.util.LinkedList;
 
-public class StockHoldings {
+public class StockHoldings implements Serializable {
+    private static final long serialVersionUID = 1L;
     private String stockID;
     private LinkedList <HoldingsList> lst = new LinkedList<>();
 
-    private static class HoldingsList {
+    private static class HoldingsList implements java.io.Serializable {
+        private static final long serialVersionUID = 1L;
         int quantity;
         double price;
         HoldingsList(int quantity, double price) {
