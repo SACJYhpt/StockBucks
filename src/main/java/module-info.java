@@ -1,6 +1,7 @@
 module com.stockbucks {
     requires javafx.controls;
     requires javafx.fxml;
+    requires java.sql;
     requires atlantafx.base;
 
     opens com.stockbucks.gui to javafx.graphics, javafx.base;
