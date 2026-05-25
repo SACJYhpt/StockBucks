@@ -1,12 +1,24 @@
 package com.stockbucks;
-
+import java.util.List;
+import java.util.ArrayList;
+import java.io.Serializable;
 import java.util.HashMap;
 
-public class User {
+public class User implements Serializable {
+    private static final long serialVersionUID = 1L;
     // 帳戶資料
     private double cash = 1200000;
     private HashMap <String, StockHoldings> holdings = new HashMap<>();
     private SettlementManager settlement = new SettlementManager();
+
+    private List<TradeRecord> tradeHistory = new ArrayList<>();
+    public List<TradeRecord> getTradeHistory() {
+        return tradeHistory;
+    }
+
+    public void addTradeRecord(TradeRecord record) {
+        this.tradeHistory.add(record);
+    }
     
     public void stockBuying(String stockID, int amount, double cost) {
         if (!holdings.containsKey(stockID)) {
