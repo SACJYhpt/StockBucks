@@ -5,7 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class TradingEngine {
-    // 處理交易
+    // 處理交易 (保留引擎內部的 dailyRecords，方便單次模擬調閱)
     private List <TradeRecord> dailyRecords = new ArrayList<>();
     // 追蹤今日零股 零股無法當沖
     private HashMap <String, Integer> todayOddsShares = new HashMap<>();
@@ -29,7 +29,8 @@ public class TradingEngine {
             todayOddsShares.clear();
             user.getSettlementManager().SettlementClearing(date, user);
         }
-        else if (date.compareTo(date) < 0) {
+        // 🛠️ 修正筆誤：將原本的 date.compareTo(date) 改為與 currentDate 比較
+        else if (date.compareTo(currentDate) < 0) {
             System.out.println("引擎時間: " + currentDate + "，傳入時間: " + date);
         }
         
@@ -37,8 +38,7 @@ public class TradingEngine {
 
         if (isBuy) {
             buying(user, stockId, date, shares, price, totalCost);
-        }
-        else {
+        } else {
             selling(user, stockId, date, shares, price, totalCost);
         }
     }
@@ -64,8 +64,12 @@ public class TradingEngine {
 
         String record = String.format("買入代號 %s: 成交價 %.2f 元共 %d 股，手續費 %d 元，總共%.2f元", stockID, price, shares, commission, totalCost);
         TradeRecord log = new TradeRecord(stockID, date, "買入", price, shares, commission, 0, totalCost);
+        
+        // 1. 紀錄到引擎
         dailyRecords.add(log);
-        System.out.println("交易成功: "+record);
+   
+        user.addTradeRecord(log); 
+        System.out.println("交易成功: " + record);
     }
 
     private void selling(User user, String stockID, String date, int shares, double price, double totalCost) {
@@ -94,8 +98,13 @@ public class TradingEngine {
 
         String record = String.format("賣出代號 %s: 成交價 %.2f 元共 %d 股，手續費 %d 元，證交稅 %d 元，總共%.2f元", stockID, price, shares, commission, tax, totalCost);
         TradeRecord log = new TradeRecord(stockID, date, "賣出", price, shares, commission, tax, totalCost);
+        
+        // 1. 紀錄到引擎
         dailyRecords.add(log);
-        System.out.println("交易成功: "+record);
+
+        user.addTradeRecord(log);
+
+        System.out.println("交易成功: " + record);
     }
 
     public List <TradeRecord> getDailyRecords() {
