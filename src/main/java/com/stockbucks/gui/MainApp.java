@@ -24,11 +24,17 @@ import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.util.Duration;
 import java.util.List;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.ObjectOutputStream;
+import java.io.File;
 import java.util.ArrayList;
 
 public class MainApp extends Application {
+    // 接收 WelcomeUI 傳遞過來的存檔資料
+    private SaveData initialSaveData = null;
 
-    private User user = new User();
+    private User user;
     private TradingEngine tradingEngine;
     private CsvLoading csvLoader = new CsvLoading();
     private PriceSimulator simulator = new PriceSimulator();
@@ -49,16 +55,40 @@ public class MainApp extends Application {
     private double xOffset = 0;
     private double yOffset = 0;
 
+    // 提供給 WelcomeUI 注入存檔資料的方法
+    public void setInitialSaveData(SaveData data) {
+        this.initialSaveData = data;
+    }
+
     @Override
     public void start(Stage stage) {
         Application.setUserAgentStylesheet(new PrimerDark().getUserAgentStylesheet());
         
-        List <String> globalCanlendar = csvLoader.loadGlobalCanlendar("TestDataTSMC");
+        // 1. 根據是否有舊存檔，初始化 User 與進度
+        if (initialSaveData != null) {
+            this.user = initialSaveData.getUser();
+            this.dayIndex = initialSaveData.getDayIndex();
+        } else {
+            this.user = new User();
+            this.dayIndex = 0;
+        }
+
+        // 2. 初始化交易引擎與載入 CSV 數據
+        List<String> globalCanlendar = csvLoader.loadGlobalCanlendar("TestDataTSMC");
         this.tradingEngine = new TradingEngine(globalCanlendar);
 
         csvLoader.streamStockData("TestDataTSMC", data -> {
             historyData.add(data);
         });
+        
+        // 3. 如果是舊存檔，把過去的交易紀錄同步到 UI 表格畫面上
+        if (this.user.getTradeHistory() != null) {
+            List<TradeRecord> pastRecords = this.user.getTradeHistory();
+            // 倒序排列，讓最新的交易紀錄顯示在最上面
+            for (int i = pastRecords.size() - 1; i >= 0; i--) {
+                observableRecords.add(pastRecords.get(i));
+            }
+        }
         
         setupTable();
         updateInfoLabel();
@@ -88,6 +118,11 @@ public class MainApp extends Application {
         sellBtn.getStyleClass().addAll(Styles.DANGER, Styles.BUTTON_OUTLINED);
         sellBtn.setOnAction(e -> handleTrade(false));
 
+        // 新增的「儲存模擬」按鈕
+        Button saveBtn = new Button("儲存模擬");
+        saveBtn.getStyleClass().addAll(Styles.ACCENT, Styles.BUTTON_OUTLINED);
+        saveBtn.setOnAction(e -> handleSaveGame());
+
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
@@ -95,7 +130,8 @@ public class MainApp extends Application {
         closeBtn.getStyleClass().addAll(Styles.BUTTON_CIRCLE, Styles.DANGER, Styles.FLAT);
         closeBtn.setOnAction(e -> Platform.exit());
 
-        topBar.getChildren().addAll(startBtn, new Label("股數:"), sharesField, buyBtn, sellBtn, currentPriceLabel, spacer, infoLabel, closeBtn);
+        // 將儲存按鈕塞入工具列中
+        topBar.getChildren().addAll(startBtn, new Label("股數:"), sharesField, buyBtn, sellBtn, saveBtn, currentPriceLabel, spacer, infoLabel, closeBtn);
 
         // --- Center Layout ---
         VBox centerBox = new VBox(10);
@@ -109,9 +145,53 @@ public class MainApp extends Application {
         root.setTop(topBar);
         root.setCenter(centerBox);
 
-        stage.initStyle(StageStyle.UNDECORATED);
+        //stage.initStyle(StageStyle.UNDECORATED);
         stage.setScene(new Scene(root, 1200, 800));
         stage.show();
+    }
+
+    /**
+     * 觸發存檔對話框
+     */
+    private void handleSaveGame() {
+        TextInputDialog dialog = new TextInputDialog("mysave");
+        dialog.setTitle("儲存模擬進度");
+        dialog.setHeaderText("工具內建存檔系統");
+        dialog.setContentText("請輸入存檔名稱:");
+        
+        // 漂亮地套用暗色系風格
+        dialog.getDialogPane().setStyle("-fx-background-color: #1c2128;");
+        
+        dialog.showAndWait().ifPresent(saveName -> {
+            String trimmedName = saveName.trim();
+            if (!trimmedName.isEmpty()) {
+                saveGame(trimmedName);
+                
+                Alert alert = new Alert(Alert.AlertType.INFORMATION);
+                alert.setTitle("儲存成功");
+                alert.setHeaderText(null);
+                alert.setContentText("模擬檔案 [" + trimmedName + ".dat] 已成功儲存至本地端！");
+                alert.showAndWait();
+            } else {
+                showWarning("存檔失敗：名稱不能為空！");
+            }
+        });
+    }
+
+    private void saveGame(String fileName) {
+        // 確保 saves 資料夾存在
+        File dir = new File("saves");
+        if (!dir.exists()) {
+            dir.mkdir();
+        }
+        
+        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(new File(dir, fileName + ".dat")))) {
+            SaveData data = new SaveData(this.user, this.dayIndex, fileName);
+            oos.writeObject(data);
+        } catch (IOException e) {
+            e.printStackTrace();
+            showWarning("存檔寫入硬碟時發生錯誤！");
+        }
     }
 
     private LineChart<Number, Number> createPriceChart() {
@@ -121,12 +201,12 @@ public class MainApp extends Application {
         xAxis.setLabel("時間 (Ticks)");
         xAxis.setForceZeroInRange(false);
         
-        yAxis.setSide(Side.RIGHT); // 保持座標軸在右邊
+        yAxis.setSide(Side.RIGHT); 
         yAxis.setForceZeroInRange(false);
         
         LineChart<Number, Number> chart = new LineChart<>(xAxis, yAxis);
         chart.setTitle("即時價格走勢");
-        chart.setCreateSymbols(false); // 不顯示折線上的圓點，畫面比較乾淨
+        chart.setCreateSymbols(false); 
         chart.setAnimated(false);
         
         priceSeries = new XYChart.Series<>();
@@ -219,5 +299,3 @@ public class MainApp extends Application {
         launch(args);
     }
 }
-//cd "C:\Users\wwumi\Documents\GitHub\StockBucks"
-//mvn clean javafx:run
