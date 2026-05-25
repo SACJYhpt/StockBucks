@@ -13,7 +13,8 @@ public class QuestionAssistant {
 
     public String answer(AiContext context, String question) {
         String prompt = """
-                你是 StockBucks 的 AI 股票解惑助手。
+                你是 StockBucks 的 AI 股票問答助手。
+                請用繁體中文回答，內容清楚、精簡、可讀。
 
                 模式：%s
                 股票代號：%s
@@ -31,8 +32,6 @@ public class QuestionAssistant {
 
                 使用者問題：
                 %s
-
-                請用繁體中文回答，內容要清楚、精簡、可讀。
                 """.formatted(
                 context.getModeDescription(),
                 context.getStockId(),

@@ -10,8 +10,8 @@ public class HistoricalDataRepository {
 
     private final SQLiteManager sqliteManager;
 
-    public HistoricalDataRepository(SQLiteManager sqliteManager) {
-        this.sqliteManager = sqliteManager;
+    public HistoricalDataRepository(String jdbcUrl) {
+        this.sqliteManager = new SQLiteManager(jdbcUrl);
         initTable();
     }
 
@@ -24,19 +24,18 @@ public class HistoricalDataRepository {
                     open_price REAL NOT NULL,
                     high_price REAL NOT NULL,
                     low_price REAL NOT NULL,
-                    close_price REAL NOT NULL
+                    close_price REAL NOT NULL,
+                    UNIQUE(stock_id, trade_date)
                 )
                 """;
         sqliteManager.execute(sql);
     }
 
     public void saveAll(List<StockData> historyData) {
-        if (historyData == null || historyData.isEmpty()) {
-            return;
-        }
+        if (historyData == null || historyData.isEmpty()) return;
 
         String sql = """
-                INSERT INTO historical_stock_data
+                INSERT OR REPLACE INTO historical_stock_data
                 (stock_id, trade_date, open_price, high_price, low_price, close_price)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """;

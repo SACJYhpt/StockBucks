@@ -2,11 +2,17 @@ package com.stockbucks.gui;
 
 import atlantafx.base.theme.PrimerDark;
 import atlantafx.base.theme.Styles;
-import com.stockbucks.*; 
+import com.stockbucks.*;
+import com.stockbucks.ai.AIHub;
+import com.stockbucks.ai.mode.MarketMode;
+import javafx.animation.Animation;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.geometry.Side;
@@ -18,17 +24,15 @@ import javafx.scene.control.*;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.*;
 import javafx.stage.Stage;
-import javafx.stage.StageStyle;
-import javafx.animation.Animation;
-import javafx.animation.KeyFrame;
-import javafx.animation.Timeline;
 import javafx.util.Duration;
-import java.util.List;
+
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
-import java.io.File;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
 
 public class MainApp extends Application {
     // 接收 WelcomeUI 傳遞過來的存檔資料
@@ -36,24 +40,30 @@ public class MainApp extends Application {
 
     private User user;
     private TradingEngine tradingEngine;
-    private CsvLoading csvLoader = new CsvLoading();
-    private PriceSimulator simulator = new PriceSimulator();
-    
-    private TableView<TradeRecord> historyTable = new TableView<>();
-    private ObservableList<TradeRecord> observableRecords = FXCollections.observableArrayList();
-    private Label currentPriceLabel = new Label("當前市價: --");
-    private Label infoLabel = new Label();
-    private TextField sharesField = new TextField("1000");
+    private final CsvLoading csvLoader = new CsvLoading();
+    private final PriceSimulator simulator = new PriceSimulator();
+
+    private final TableView<TradeRecord> historyTable = new TableView<>();
+    private final ObservableList<TradeRecord> observableRecords = FXCollections.observableArrayList();
+    private final Label currentPriceLabel = new Label("當前市價: --");
+    private final Label infoLabel = new Label();
+    private final TextField sharesField = new TextField("1000");
 
     private LineChart<Number, Number> lineChart;
     private XYChart.Series<Number, Number> priceSeries = new XYChart.Series<>();
     private int tickCount = 0;
 
-    private List<StockData> historyData = new ArrayList<>();
+    private final List<StockData> historyData = new ArrayList<>();
     private int dayIndex = 0;
     private Timeline timeline;
     private double xOffset = 0;
     private double yOffset = 0;
+
+    // ===== AI 區塊 =====
+    private final AIHub aiHub = new AIHub("api");
+    private final TextField aiQuestionField = new TextField();
+    private final TextArea aiOutputArea = new TextArea();
+    private final ComboBox<MarketMode> marketModeBox = new ComboBox<>();
 
     // 提供給 WelcomeUI 注入存檔資料的方法
     public void setInitialSaveData(SaveData data) {
@@ -63,7 +73,7 @@ public class MainApp extends Application {
     @Override
     public void start(Stage stage) {
         Application.setUserAgentStylesheet(new PrimerDark().getUserAgentStylesheet());
-        
+
         // 1. 根據是否有舊存檔，初始化 User 與進度
         if (initialSaveData != null) {
             this.user = initialSaveData.getUser();
@@ -80,16 +90,18 @@ public class MainApp extends Application {
         csvLoader.streamStockData("TestDataTSMC", data -> {
             historyData.add(data);
         });
-        
-        // 3. 如果是舊存檔，把過去的交易紀錄同步到 UI 表格畫面上
+
+        // 3. 將歷史資料快取給 AI 模組
+        aiHub.cacheHistoryData(historyData);
+
+        // 4. 如果是舊存檔，把過去的交易紀錄同步到 UI 表格畫面上
         if (this.user.getTradeHistory() != null) {
             List<TradeRecord> pastRecords = this.user.getTradeHistory();
-            // 倒序排列，讓最新的交易紀錄顯示在最上面
             for (int i = pastRecords.size() - 1; i >= 0; i--) {
                 observableRecords.add(pastRecords.get(i));
             }
         }
-        
+
         setupTable();
         updateInfoLabel();
 
@@ -97,8 +109,14 @@ public class MainApp extends Application {
         root.setPadding(new Insets(15));
         root.setStyle("-fx-background-radius: 15; -fx-border-radius: 15; -fx-border-color: #444; -fx-background-color: #1c2128;");
 
-        root.setOnMousePressed(e -> { xOffset = e.getSceneX(); yOffset = e.getSceneY(); });
-        root.setOnMouseDragged(e -> { stage.setX(e.getScreenX() - xOffset); stage.setY(e.getScreenY() - yOffset); });
+        root.setOnMousePressed(e -> {
+            xOffset = e.getSceneX();
+            yOffset = e.getSceneY();
+        });
+        root.setOnMouseDragged(e -> {
+            stage.setX(e.getScreenX() - xOffset);
+            stage.setY(e.getScreenY() - yOffset);
+        });
 
         // --- Top Bar ---
         HBox topBar = new HBox(15);
@@ -110,6 +128,7 @@ public class MainApp extends Application {
         startBtn.setOnAction(e -> handleStartSimulation());
 
         sharesField.setPrefWidth(80);
+
         Button buyBtn = new Button("買入");
         buyBtn.getStyleClass().addAll(Styles.SUCCESS, Styles.BUTTON_OUTLINED);
         buyBtn.setOnAction(e -> handleTrade(true));
@@ -118,7 +137,6 @@ public class MainApp extends Application {
         sellBtn.getStyleClass().addAll(Styles.DANGER, Styles.BUTTON_OUTLINED);
         sellBtn.setOnAction(e -> handleTrade(false));
 
-        // 新增的「儲存模擬」按鈕
         Button saveBtn = new Button("儲存模擬");
         saveBtn.getStyleClass().addAll(Styles.ACCENT, Styles.BUTTON_OUTLINED);
         saveBtn.setOnAction(e -> handleSaveGame());
@@ -130,23 +148,38 @@ public class MainApp extends Application {
         closeBtn.getStyleClass().addAll(Styles.BUTTON_CIRCLE, Styles.DANGER, Styles.FLAT);
         closeBtn.setOnAction(e -> Platform.exit());
 
-        // 將儲存按鈕塞入工具列中
-        topBar.getChildren().addAll(startBtn, new Label("股數:"), sharesField, buyBtn, sellBtn, saveBtn, currentPriceLabel, spacer, infoLabel, closeBtn);
+        topBar.getChildren().addAll(
+                startBtn,
+                new Label("股數:"),
+                sharesField,
+                buyBtn,
+                sellBtn,
+                saveBtn,
+                currentPriceLabel,
+                spacer,
+                infoLabel,
+                closeBtn
+        );
 
         // --- Center Layout ---
         VBox centerBox = new VBox(10);
         lineChart = createPriceChart();
-        
+
         VBox.setVgrow(lineChart, Priority.ALWAYS);
         historyTable.setMinHeight(200);
         historyTable.setMaxHeight(200);
 
         centerBox.getChildren().addAll(lineChart, historyTable);
+
+        // --- AI Panel ---
+        VBox aiPanel = createAiPanel();
+
         root.setTop(topBar);
         root.setCenter(centerBox);
+        root.setRight(aiPanel);
 
-        //stage.initStyle(StageStyle.UNDECORATED);
-        stage.setScene(new Scene(root, 1200, 800));
+        stage.setScene(new Scene(root, 1560, 800));
+        stage.setTitle("StockBucks 模擬交易系統");
         stage.show();
     }
 
@@ -158,15 +191,14 @@ public class MainApp extends Application {
         dialog.setTitle("儲存模擬進度");
         dialog.setHeaderText("工具內建存檔系統");
         dialog.setContentText("請輸入存檔名稱:");
-        
-        // 漂亮地套用暗色系風格
+
         dialog.getDialogPane().setStyle("-fx-background-color: #1c2128;");
-        
+
         dialog.showAndWait().ifPresent(saveName -> {
             String trimmedName = saveName.trim();
             if (!trimmedName.isEmpty()) {
                 saveGame(trimmedName);
-                
+
                 Alert alert = new Alert(Alert.AlertType.INFORMATION);
                 alert.setTitle("儲存成功");
                 alert.setHeaderText(null);
@@ -179,12 +211,11 @@ public class MainApp extends Application {
     }
 
     private void saveGame(String fileName) {
-        // 確保 saves 資料夾存在
         File dir = new File("saves");
         if (!dir.exists()) {
             dir.mkdir();
         }
-        
+
         try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(new File(dir, fileName + ".dat")))) {
             SaveData data = new SaveData(this.user, this.dayIndex, fileName);
             oos.writeObject(data);
@@ -197,34 +228,39 @@ public class MainApp extends Application {
     private LineChart<Number, Number> createPriceChart() {
         NumberAxis xAxis = new NumberAxis();
         NumberAxis yAxis = new NumberAxis();
-        
+
         xAxis.setLabel("時間 (Ticks)");
         xAxis.setForceZeroInRange(false);
-        
-        yAxis.setSide(Side.RIGHT); 
+
+        yAxis.setSide(Side.RIGHT);
         yAxis.setForceZeroInRange(false);
-        
+
         LineChart<Number, Number> chart = new LineChart<>(xAxis, yAxis);
         chart.setTitle("即時價格走勢");
-        chart.setCreateSymbols(false); 
+        chart.setCreateSymbols(false);
         chart.setAnimated(false);
-        
+
         priceSeries = new XYChart.Series<>();
         priceSeries.setName("股價");
         chart.getData().add(priceSeries);
-        
+
         return chart;
     }
 
     private void handleTrade(boolean isBuy) {
-        if (currentPriceLabel.getText().contains("--")) return;
+        if (currentPriceLabel.getText().contains("--")) {
+            return;
+        }
+
         try {
             int shares = Integer.parseInt(sharesField.getText());
             double price = Double.parseDouble(currentPriceLabel.getText().replace("當前市價: ", ""));
-            String date = (historyData != null && dayIndex < historyData.size()) ? historyData.get(dayIndex).getDate() : "2024-01-01";
+            String date = (historyData != null && dayIndex < historyData.size())
+                    ? historyData.get(dayIndex).getDate()
+                    : "2024-01-01";
 
             tradingEngine.trading(user, "TestDataTSMC", date, shares, price, isBuy);
-            
+
             List<TradeRecord> records = tradingEngine.getDailyRecords();
             if (!records.isEmpty()) {
                 TradeRecord lastRecord = records.get(records.size() - 1);
@@ -232,6 +268,7 @@ public class MainApp extends Application {
                     observableRecords.add(0, lastRecord);
                 }
             }
+
             updateInfoLabel();
         } catch (Exception ex) {
             ex.printStackTrace();
@@ -240,20 +277,27 @@ public class MainApp extends Application {
     }
 
     private void updateInfoLabel() {
-        infoLabel.setText(String.format("可用現金: $%,.0f | 庫存: %d 股", 
-            user.getCash(), user.getStockQuantity("TestDataTSMC")));
+        infoLabel.setText(String.format(
+                "可用現金: $%,.0f | 庫存: %d 股",
+                user.getCash(),
+                user.getStockQuantity("TestDataTSMC")
+        ));
     }
 
     @SuppressWarnings("unchecked")
     private void setupTable() {
         TableColumn<TradeRecord, String> dateCol = new TableColumn<>("日期");
         dateCol.setCellValueFactory(new PropertyValueFactory<>("date"));
+
         TableColumn<TradeRecord, String> typeCol = new TableColumn<>("類型");
         typeCol.setCellValueFactory(new PropertyValueFactory<>("type"));
+
         TableColumn<TradeRecord, Double> priceCol = new TableColumn<>("成交價");
         priceCol.setCellValueFactory(new PropertyValueFactory<>("price"));
+
         TableColumn<TradeRecord, Integer> sharesCol = new TableColumn<>("股數");
         sharesCol.setCellValueFactory(new PropertyValueFactory<>("shares"));
+
         TableColumn<TradeRecord, Double> costCol = new TableColumn<>("結算金額");
         costCol.setCellValueFactory(new PropertyValueFactory<>("totalCost"));
 
@@ -263,16 +307,23 @@ public class MainApp extends Application {
     }
 
     private void handleStartSimulation() {
-        if (historyData == null || dayIndex >= historyData.size()) return;
+        if (historyData == null || dayIndex >= historyData.size()) {
+            return;
+        }
 
         StockData today = historyData.get(dayIndex);
-        double yesterdayClose = (dayIndex == 0) ? today.getOpen() : historyData.get(dayIndex - 1).getClose();
+        double yesterdayClose = (dayIndex == 0)
+                ? today.getOpen()
+                : historyData.get(dayIndex - 1).getClose();
+
         simulator.generateDayPath(today, yesterdayClose);
-        
+
         priceSeries.getData().clear();
         tickCount = 0;
 
-        if (timeline != null) timeline.stop();
+        if (timeline != null) {
+            timeline.stop();
+        }
 
         timeline = new Timeline(new KeyFrame(Duration.millis(800), e -> {
             double currentPrice = simulator.getNextPrice();
@@ -286,6 +337,131 @@ public class MainApp extends Application {
         }));
         timeline.setCycleCount(Animation.INDEFINITE);
         timeline.play();
+    }
+
+    private VBox createAiPanel() {
+        VBox box = new VBox(10);
+        box.setPadding(new Insets(10));
+        box.setPrefWidth(360);
+        box.setStyle("-fx-background-color: #22272e; -fx-background-radius: 10;");
+
+        Label title = new Label("AI 助手");
+        title.setStyle("-fx-font-size: 18px; -fx-font-weight: bold; -fx-text-fill: #adbac7;");
+
+        marketModeBox.getItems().addAll(MarketMode.REALTIME, MarketMode.HISTORY, MarketMode.AI_RANDOM);
+        marketModeBox.setValue(MarketMode.HISTORY);
+        marketModeBox.setOnAction(e -> aiHub.setMarketMode(marketModeBox.getValue()));
+
+        aiQuestionField.setPromptText("輸入問題，例如：我現在的持倉風險大嗎？");
+
+        aiOutputArea.setWrapText(true);
+        aiOutputArea.setEditable(false);
+        aiOutputArea.setPrefHeight(320);
+
+        Button askBtn = new Button("AI 問答");
+        askBtn.getStyleClass().addAll(Styles.ACCENT);
+
+        Button analyzeBtn = new Button("市場分析");
+        analyzeBtn.getStyleClass().addAll(Styles.SUCCESS, Styles.BUTTON_OUTLINED);
+
+        Button summaryBtn = new Button("交易摘要");
+        summaryBtn.getStyleClass().addAll(Styles.BUTTON_OUTLINED);
+
+        askBtn.setOnAction(e -> handleAiAsk());
+        analyzeBtn.setOnAction(e -> handleAiAnalyze());
+        summaryBtn.setOnAction(e -> handleAiSummary());
+
+        HBox btnRow = new HBox(10, askBtn, analyzeBtn, summaryBtn);
+
+        box.getChildren().addAll(
+                title,
+                new Label("市場模式"),
+                marketModeBox,
+                new Label("提問"),
+                aiQuestionField,
+                btnRow,
+                new Label("AI 回應"),
+                aiOutputArea
+        );
+
+        return box;
+    }
+
+    private double getCurrentPriceValue() {
+        try {
+            if (!currentPriceLabel.getText().contains("--")) {
+                return Double.parseDouble(currentPriceLabel.getText().replace("當前市價: ", ""));
+            }
+        } catch (Exception ignored) {
+        }
+
+        if (historyData != null && !historyData.isEmpty()) {
+            int index = Math.max(0, Math.min(dayIndex, historyData.size() - 1));
+            return historyData.get(index).getClose();
+        }
+
+        return 0.0;
+    }
+
+    private void handleAiAsk() {
+        String question = aiQuestionField.getText().trim();
+        if (question.isEmpty()) {
+            showWarning("請先輸入問題");
+            return;
+        }
+
+        runAiTask("AI 正在回答中...", () ->
+                aiHub.answerQuestion(
+                        user,
+                        tradingEngine,
+                        historyData,
+                        "TestDataTSMC",
+                        getCurrentPriceValue(),
+                        question
+                )
+        );
+    }
+
+    private void handleAiAnalyze() {
+        runAiTask("AI 正在分析市場...", () ->
+                aiHub.analyzeCurrentMarket(
+                        user,
+                        tradingEngine,
+                        historyData,
+                        "TestDataTSMC",
+                        getCurrentPriceValue()
+                )
+        );
+    }
+
+    private void handleAiSummary() {
+        runAiTask("AI 正在整理交易摘要...", () ->
+                aiHub.summarizeTrades(
+                        user,
+                        tradingEngine,
+                        historyData,
+                        "TestDataTSMC",
+                        getCurrentPriceValue()
+                )
+        );
+    }
+
+    private void runAiTask(String loadingText, Callable<String> action) {
+        aiOutputArea.setText(loadingText);
+
+        Task<String> task = new Task<>() {
+            @Override
+            protected String call() throws Exception {
+                return action.call();
+            }
+        };
+
+        task.setOnSucceeded(e -> aiOutputArea.setText(task.getValue()));
+        task.setOnFailed(e -> aiOutputArea.setText("[AI 執行失敗] " + task.getException().getMessage()));
+
+        Thread thread = new Thread(task);
+        thread.setDaemon(true);
+        thread.start();
     }
 
     private void showWarning(String msg) {

@@ -25,10 +25,7 @@ public class TradeSummaryAssistant {
                 持倉摘要：
                 %s
 
-                請整理：
-                1. 今日交易重點
-                2. 目前持倉狀況
-                3. 風險與注意事項
+                請整理今日交易重點、持倉狀況與風險提醒。
                 """.formatted(
                 context.getStockId(),
                 context.getLatestDate(),

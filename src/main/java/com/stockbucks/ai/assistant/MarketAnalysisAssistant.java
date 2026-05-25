@@ -13,7 +13,7 @@ public class MarketAnalysisAssistant {
 
     public String analyze(AiContext context) {
         String prompt = """
-                你是 StockBucks 的市場模擬分析助手。
+                你是 StockBucks 的市場分析助手。
 
                 模式：%s
                 股票代號：%s
@@ -31,7 +31,7 @@ public class MarketAnalysisAssistant {
 
                 請分析：
                 1. 目前市場狀態
-                2. 價格可能行為解釋
+                2. 價格可能原因
                 3. 風險提醒
                 """.formatted(
                 context.getModeDescription(),

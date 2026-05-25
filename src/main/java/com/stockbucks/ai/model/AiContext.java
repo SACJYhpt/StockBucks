@@ -36,45 +36,45 @@ public class AiContext {
     public static AiContext from(User user,
                                  TradingEngine tradingEngine,
                                  List<StockData> historyData,
-                                 MarketSnapshot snapshot) {
-
-        String latestDate = snapshot.getLatestDate();
-        String historySummary = buildHistorySummary(historyData, snapshot.getStockId());
-        String tradeSummary = buildTradeSummary(tradingEngine);
-        String holdingSummary = buildHoldingSummary(user, snapshot.getStockId(), snapshot.getCurrentPrice());
+                                 String stockId,
+                                 double currentPrice,
+                                 String modeDescription) {
 
         return new AiContext(
-                snapshot.getStockId(),
-                latestDate,
-                snapshot.getCurrentPrice(),
-                snapshot.getModeDescription(),
-                historySummary,
-                tradeSummary,
-                holdingSummary
+                stockId,
+                getLatestDate(historyData),
+                currentPrice,
+                modeDescription,
+                buildHistorySummary(historyData, stockId),
+                buildTradeSummary(tradingEngine),
+                buildHoldingSummary(user, stockId, currentPrice)
         );
     }
 
+    private static String getLatestDate(List<StockData> historyData) {
+        if (historyData == null || historyData.isEmpty()) return "N/A";
+        return historyData.get(historyData.size() - 1).getDate();
+    }
+
     private static String buildHistorySummary(List<StockData> historyData, String stockId) {
-        if (historyData == null || historyData.isEmpty()) {
-            return "無歷史資料";
-        }
+        if (historyData == null || historyData.isEmpty()) return "無歷史資料";
 
         StringBuilder sb = new StringBuilder();
         int count = 0;
 
         for (int i = historyData.size() - 1; i >= 0 && count < 5; i--) {
-            StockData data = historyData.get(i);
-            if (stockId.equals(data.getStockID())) {
+            StockData d = historyData.get(i);
+            if (stockId.equals(d.getStockID())) {
                 sb.append("- ")
-                  .append(data.getDate())
+                  .append(d.getDate())
                   .append(" 開:")
-                  .append(String.format("%.2f", data.getOpen()))
+                  .append(String.format("%.2f", d.getOpen()))
                   .append(" 高:")
-                  .append(String.format("%.2f", data.getHigh()))
+                  .append(String.format("%.2f", d.getHigh()))
                   .append(" 低:")
-                  .append(String.format("%.2f", data.getLow()))
+                  .append(String.format("%.2f", d.getLow()))
                   .append(" 收:")
-                  .append(String.format("%.2f", data.getClose()))
+                  .append(String.format("%.2f", d.getClose()))
                   .append("\n");
                 count++;
             }
@@ -84,14 +84,10 @@ public class AiContext {
     }
 
     private static String buildTradeSummary(TradingEngine tradingEngine) {
-        if (tradingEngine == null) {
-            return "無交易資料";
-        }
+        if (tradingEngine == null) return "無交易資料";
 
         List<TradeRecord> records = tradingEngine.getDailyRecords();
-        if (records == null || records.isEmpty()) {
-            return "目前尚無交易紀錄";
-        }
+        if (records == null || records.isEmpty()) return "目前尚無交易紀錄";
 
         StringBuilder sb = new StringBuilder();
         int start = Math.max(0, records.size() - 5);
@@ -112,9 +108,7 @@ public class AiContext {
     }
 
     private static String buildHoldingSummary(User user, String stockId, double currentPrice) {
-        if (user == null) {
-            return "無帳戶資料";
-        }
+        if (user == null) return "無帳戶資料";
 
         return """
                 可用現金：%.2f
@@ -133,31 +127,11 @@ public class AiContext {
         );
     }
 
-    public String getStockId() {
-        return stockId;
-    }
-
-    public String getLatestDate() {
-        return latestDate;
-    }
-
-    public double getCurrentPrice() {
-        return currentPrice;
-    }
-
-    public String getModeDescription() {
-        return modeDescription;
-    }
-
-    public String getHistorySummary() {
-        return historySummary;
-    }
-
-    public String getTradeSummary() {
-        return tradeSummary;
-    }
-
-    public String getHoldingSummary() {
-        return holdingSummary;
-    }
+    public String getStockId() { return stockId; }
+    public String getLatestDate() { return latestDate; }
+    public double getCurrentPrice() { return currentPrice; }
+    public String getModeDescription() { return modeDescription; }
+    public String getHistorySummary() { return historySummary; }
+    public String getTradeSummary() { return tradeSummary; }
+    public String getHoldingSummary() { return holdingSummary; }
 }

@@ -10,59 +10,37 @@ import com.stockbucks.ai.client.ApiModelClient;
 import com.stockbucks.ai.client.LocalModelClient;
 import com.stockbucks.ai.client.ModelClient;
 import com.stockbucks.ai.data.HistoricalDataRepository;
-import com.stockbucks.ai.data.MarketDataService;
-import com.stockbucks.ai.data.SQLiteManager;
-import com.stockbucks.ai.mode.HistoryMode;
 import com.stockbucks.ai.mode.MarketMode;
-import com.stockbucks.ai.mode.RandomAiMode;
-import com.stockbucks.ai.mode.RealtimeMode;
 import com.stockbucks.ai.model.AiContext;
-import com.stockbucks.ai.model.MarketSnapshot;
 
+import java.util.Collections;
 import java.util.List;
 
 public class AIHub {
 
-    private MarketMode currentMode;
-
-    private final RealtimeMode realtimeMode;
-    private final HistoryMode historyMode;
-    private final RandomAiMode randomAiMode;
+    private MarketMode currentMode = MarketMode.HISTORY;
 
     private final QuestionAssistant questionAssistant;
     private final MarketAnalysisAssistant marketAnalysisAssistant;
     private final TradeSummaryAssistant tradeSummaryAssistant;
+    private final HistoricalDataRepository historicalRepo;
 
-    private final HistoricalDataRepository historicalDataRepository;
-    private final MarketDataService marketDataService;
-
-    public AIHub() {
-        this("local");
-    }
-
-    public AIHub(String modelType) {
-        ModelClient modelClient = createModelClient(modelType);
-
-        SQLiteManager sqliteManager = new SQLiteManager("jdbc:sqlite:stockbucks_ai.db");
-        this.historicalDataRepository = new HistoricalDataRepository(sqliteManager);
-        this.marketDataService = new MarketDataService(historicalDataRepository);
-
-        this.realtimeMode = new RealtimeMode(marketDataService);
-        this.historyMode = new HistoryMode(historicalDataRepository);
-        this.randomAiMode = new RandomAiMode();
+    public AIHub(String clientType) {
+        ModelClient modelClient;
+        if ("local".equalsIgnoreCase(clientType)) {
+            modelClient = new LocalModelClient();
+        } else {
+            modelClient = new ApiModelClient();
+        }
 
         this.questionAssistant = new QuestionAssistant(modelClient);
         this.marketAnalysisAssistant = new MarketAnalysisAssistant(modelClient);
         this.tradeSummaryAssistant = new TradeSummaryAssistant(modelClient);
-
-        this.currentMode = MarketMode.HISTORY;
+        this.historicalRepo = new HistoricalDataRepository("jdbc:sqlite:stockbucks_ai.db");
     }
 
-    private ModelClient createModelClient(String modelType) {
-        if ("api".equalsIgnoreCase(modelType)) {
-            return new ApiModelClient();
-        }
-        return new LocalModelClient();
+    public AIHub() {
+        this("api");
     }
 
     public void setMarketMode(MarketMode mode) {
@@ -73,34 +51,12 @@ public class AIHub {
         return currentMode;
     }
 
-    public HistoricalDataRepository getHistoricalDataRepository() {
-        return historicalDataRepository;
+    public void cacheHistoryData(List<StockData> historyData) {
+        historicalRepo.saveAll(historyData);
     }
 
-    public MarketDataService getMarketDataService() {
-        return marketDataService;
-    }
-
-    public MarketSnapshot getCurrentMarketSnapshot(String stockId,
-                                                   List<StockData> historyData,
-                                                   double currentPrice) {
-        return switch (currentMode) {
-            case REALTIME -> realtimeMode.getSnapshot(stockId, currentPrice);
-            case HISTORY -> historyMode.getSnapshot(stockId, historyData, currentPrice);
-            case AI_RANDOM -> randomAiMode.getSnapshot(stockId, currentPrice);
-        };
-    }
-
-    public String analyzeCurrentMarket(User user,
-                                       TradingEngine tradingEngine,
-                                       List<StockData> historyData,
-                                       String stockId,
-                                       double currentPrice) {
-
-        MarketSnapshot snapshot = getCurrentMarketSnapshot(stockId, historyData, currentPrice);
-        AiContext context = AiContext.from(user, tradingEngine, historyData, snapshot);
-
-        return marketAnalysisAssistant.analyze(context);
+    public List<StockData> loadCachedHistory(String stockId) {
+        return historicalRepo.findByStockId(stockId);
     }
 
     public String answerQuestion(User user,
@@ -110,10 +66,24 @@ public class AIHub {
                                  double currentPrice,
                                  String question) {
 
-        MarketSnapshot snapshot = getCurrentMarketSnapshot(stockId, historyData, currentPrice);
-        AiContext context = AiContext.from(user, tradingEngine, historyData, snapshot);
-
+        List<StockData> effectiveHistory = prepareHistory(historyData, stockId);
+        AiContext context = AiContext.from(
+                user, tradingEngine, effectiveHistory, stockId, currentPrice, getModeDescription()
+        );
         return questionAssistant.answer(context, question);
+    }
+
+    public String analyzeCurrentMarket(User user,
+                                       TradingEngine tradingEngine,
+                                       List<StockData> historyData,
+                                       String stockId,
+                                       double currentPrice) {
+
+        List<StockData> effectiveHistory = prepareHistory(historyData, stockId);
+        AiContext context = AiContext.from(
+                user, tradingEngine, effectiveHistory, stockId, currentPrice, getModeDescription()
+        );
+        return marketAnalysisAssistant.analyze(context);
     }
 
     public String summarizeTrades(User user,
@@ -122,9 +92,27 @@ public class AIHub {
                                   String stockId,
                                   double currentPrice) {
 
-        MarketSnapshot snapshot = getCurrentMarketSnapshot(stockId, historyData, currentPrice);
-        AiContext context = AiContext.from(user, tradingEngine, historyData, snapshot);
-
+        List<StockData> effectiveHistory = prepareHistory(historyData, stockId);
+        AiContext context = AiContext.from(
+                user, tradingEngine, effectiveHistory, stockId, currentPrice, getModeDescription()
+        );
         return tradeSummaryAssistant.summarize(context);
+    }
+
+    private List<StockData> prepareHistory(List<StockData> historyData, String stockId) {
+        if (historyData != null && !historyData.isEmpty()) {
+            return historyData;
+        }
+
+        List<StockData> cached = historicalRepo.findByStockId(stockId);
+        return cached == null ? Collections.emptyList() : cached;
+    }
+
+    private String getModeDescription() {
+        return switch (currentMode) {
+            case REALTIME -> "即時股票模式";
+            case HISTORY -> "歷年股票資料模式";
+            case AI_RANDOM -> "AI 全隨機股市模式";
+        };
     }
 }
