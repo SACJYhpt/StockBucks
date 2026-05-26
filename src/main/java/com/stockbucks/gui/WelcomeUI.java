@@ -8,7 +8,10 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 import java.util.List;
@@ -16,31 +19,52 @@ import java.util.List;
 public class WelcomeUI {
 
     private final Stage stage;
-    private final VBox mainMenuRoot;
+    private final StackPane rootContainer;
+    private VBox mainMenuRoot;
 
     public WelcomeUI(Stage stage) {
         this.stage = stage;
-        this.mainMenuRoot = createMainMenu();
+        this.rootContainer = new StackPane();
+        initUI(); 
     }
 
-    /**
-     * 顯示歡迎主選單
-     */
+    private void initUI() {
+        ImageView backgroundView = new ImageView();
+        try {
+            String imagePath = getClass().getResource("/com/stockbucks/gui/stonks-meme.gif").toExternalForm();
+            backgroundView.setImage(new Image(imagePath));
+        } catch (Exception e) {
+            System.out.println("暫時找不到 GIF 背景圖，將使用純色備用背景。");
+        }
+
+        backgroundView.fitWidthProperty().bind(stage.widthProperty());
+        backgroundView.fitHeightProperty().bind(stage.heightProperty());
+        backgroundView.setPreserveRatio(false); 
+
+        this.mainMenuRoot = createMainMenu();
+
+        rootContainer.setStyle("-fx-background-color: #1c2128;"); 
+        rootContainer.getChildren().addAll(backgroundView, mainMenuRoot);
+    }
+
+  
+     //顯示歡迎主選單
+
     public void show() {
-        Scene scene = new Scene(mainMenuRoot, 600, 450);
+        Scene scene = new Scene(rootContainer, 600, 450);
         stage.setScene(scene);
         stage.setTitle("StockBucks 模擬交易系統");
         stage.show();
     }
 
-    /**
-     * 建立主選單畫面
-     */
+
+     //建立主選單畫面
+
     private VBox createMainMenu() {
         VBox root = new VBox(25);
         root.setAlignment(Pos.CENTER);
         root.setPadding(new Insets(50));
-        root.setStyle("-fx-background-color: #1c2128;"); // 保持與 MainApp 一致的暗色調
+        root.setStyle("-fx-background-color: rgba(28, 33, 40, 0.75);"); // 半透明遮罩，方便看清文字
 
         Label titleLabel = new Label("StockBucks");
         titleLabel.getStyleClass().add(Styles.TITLE_1);
@@ -52,7 +76,7 @@ public class WelcomeUI {
         Button newMarketBtn = new Button("開啟新市場");
         newMarketBtn.getStyleClass().addAll(Styles.LARGE, Styles.ACCENT);
         newMarketBtn.setPrefWidth(250);
-        newMarketBtn.setOnAction(e -> enterMainApp(null)); // 傳入 null 代表全新開始
+        newMarketBtn.setOnAction(e -> enterMainApp(null)); 
 
         Button loadArchiveBtn = new Button("開啟舊模擬檔案");
         loadArchiveBtn.getStyleClass().addAll(Styles.LARGE, Styles.SUCCESS, Styles.BUTTON_OUTLINED);
@@ -63,37 +87,38 @@ public class WelcomeUI {
         return root;
     }
 
-    /**
-     * 切換到內建的存檔選取清單畫面
-     */
+
+     //切換到內建的存檔選取清單畫面
     private void switchToArchiveList() {
         VBox archiveRoot = new VBox(15);
         archiveRoot.setAlignment(Pos.CENTER);
         archiveRoot.setPadding(new Insets(30));
-        archiveRoot.setStyle("-fx-background-color: #1c2128;");
+        archiveRoot.setStyle("-fx-background-color: rgba(28, 33, 40, 0.85);");
 
         Label headerLabel = new Label("請選擇要載入的模擬檔案");
         headerLabel.getStyleClass().add(Styles.TITLE_3);
         headerLabel.setStyle("-fx-text-fill: #adbac7;");
 
-        // 讀取本地 saves/ 目錄下的所有 .dat 檔案
         List<String> saveFiles = SaveManager.getSaveFiles();
         ListView<String> archiveListView = new ListView<>(FXCollections.observableArrayList(saveFiles));
         archiveListView.setPrefHeight(200);
         archiveListView.setMaxWidth(400);
 
-        // 如果沒有任何存檔的提示
         if (saveFiles.isEmpty()) {
             archiveListView.setPlaceholder(new Label("目前沒有任何模擬存檔"));
         }
 
-        // 按鈕列
         HBox btnBox = new HBox(15);
         btnBox.setAlignment(Pos.CENTER);
 
         Button backBtn = new Button("返回主選單");
         backBtn.getStyleClass().add(Styles.FLAT);
-        backBtn.setOnAction(e -> stage.getScene().setRoot(mainMenuRoot));
+        backBtn.setOnAction(e -> {
+            // 安全切換回主選單
+            if (rootContainer.getChildren().size() > 1) {
+                rootContainer.getChildren().set(1, mainMenuRoot);
+            }
+        });
 
         Button confirmLoadBtn = new Button("載入檔案");
         confirmLoadBtn.getStyleClass().add(Styles.SUCCESS);
@@ -125,16 +150,15 @@ public class WelcomeUI {
         btnBox.getChildren().addAll(backBtn, confirmLoadBtn, deleteBtn);
         archiveRoot.getChildren().addAll(headerLabel, archiveListView, btnBox);
         
-        // 直接替換當前場景的 Root 節點，視覺流暢不閃爍
-        stage.getScene().setRoot(archiveRoot);
+        if (rootContainer.getChildren().size() > 1) {
+            rootContainer.getChildren().set(1, archiveRoot);
+        } else {
+            rootContainer.getChildren().add(archiveRoot);
+        }
     }
 
-    /**
-     * 跳轉進入主模擬程式
-     */
     private void enterMainApp(SaveData loadedData) {
         MainApp mainApp = new MainApp();
-        // 將載入的數據（或 null）注入 MainApp
         mainApp.setInitialSaveData(loadedData); 
         try {
             mainApp.start(stage);
