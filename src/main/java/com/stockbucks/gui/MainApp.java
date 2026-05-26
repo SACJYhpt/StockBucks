@@ -227,8 +227,16 @@ public class MainApp extends Application {
         box.setStyle("-fx-background-color: #1c2128; -fx-border-color: #30363d; -fx-border-width: 0 1 0 0;");
 
         // 頂部漢堡縮放按鈕
-        Button toggleBtn = new Button("☰");
+        Button toggleBtn = new Button();
         toggleBtn.getStyleClass().addAll(Styles.BUTTON_CIRCLE, Styles.FLAT);
+        javafx.scene.shape.SVGPath hamburgerIcon = new javafx.scene.shape.SVGPath();
+
+        hamburgerIcon.setContent("M3 5h18M3 12h18M3 19h18"); 
+        hamburgerIcon.setStroke(javafx.scene.paint.Color.web("#adbac7"));
+        hamburgerIcon.setStrokeWidth(2);
+        hamburgerIcon.setStrokeLineCap(javafx.scene.shape.StrokeLineCap.ROUND);
+
+        toggleBtn.setGraphic(hamburgerIcon);
 
         // 建立功能按鈕
         List<Button> menuButtons = new ArrayList<>();
