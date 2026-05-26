@@ -4,6 +4,7 @@ import atlantafx.base.theme.PrimerDark;
 import atlantafx.base.theme.Styles;
 import com.stockbucks.*;
 import com.stockbucks.ai.AIHub;
+import com.stockbucks.ai.data.MarketDataUpdateResult;
 import com.stockbucks.ai.mode.MarketMode;
 import javafx.animation.Animation;
 import javafx.animation.KeyFrame;
@@ -35,6 +36,8 @@ import java.util.List;
 import java.util.concurrent.Callable;
 
 public class MainApp extends Application {
+    private static final String STOCK_ID = "2330";
+
     // 接收 WelcomeUI 傳遞過來的存檔資料
     private SaveData initialSaveData = null;
 
@@ -78,16 +81,17 @@ public class MainApp extends Application {
         if (initialSaveData != null) {
             this.user = initialSaveData.getUser();
             this.dayIndex = initialSaveData.getDayIndex();
+            aiHub.setMarketMode(initialSaveData.getMarketMode());
         } else {
             this.user = new User();
             this.dayIndex = 0;
         }
 
         // 2. 初始化交易引擎與載入 CSV 數據
-        List<String> globalCanlendar = csvLoader.loadGlobalCanlendar("TestDataTSMC");
+        List<String> globalCanlendar = csvLoader.loadGlobalCanlendar(STOCK_ID);
         this.tradingEngine = new TradingEngine(globalCanlendar);
 
-        csvLoader.streamStockData("TestDataTSMC", data -> {
+        csvLoader.streamStockData(STOCK_ID, data -> {
             historyData.add(data);
         });
 
@@ -217,7 +221,7 @@ public class MainApp extends Application {
         }
 
         try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(new File(dir, fileName + ".dat")))) {
-            SaveData data = new SaveData(this.user, this.dayIndex, fileName);
+            SaveData data = new SaveData(this.user, this.dayIndex, fileName, aiHub.getMarketMode());
             oos.writeObject(data);
         } catch (IOException e) {
             e.printStackTrace();
@@ -259,7 +263,7 @@ public class MainApp extends Application {
                     ? historyData.get(dayIndex).getDate()
                     : "2024-01-01";
 
-            tradingEngine.trading(user, "TestDataTSMC", date, shares, price, isBuy);
+            tradingEngine.trading(user, STOCK_ID, date, shares, price, isBuy);
 
             List<TradeRecord> records = tradingEngine.getDailyRecords();
             if (!records.isEmpty()) {
@@ -278,9 +282,10 @@ public class MainApp extends Application {
 
     private void updateInfoLabel() {
         infoLabel.setText(String.format(
-                "可用現金: $%,.0f | 庫存: %d 股",
-                user.getCash(),
-                user.getStockQuantity("TestDataTSMC")
+                "初始資金: $%,.0f | 可用資金: $%,.0f | 持有股數: %d 股",
+                user.getInitialCash(),
+                user.getAvailableCash(),
+                user.getStockQuantity(STOCK_ID)
         ));
     }
 
@@ -307,6 +312,13 @@ public class MainApp extends Application {
     }
 
     private void handleStartSimulation() {
+        List<StockData> modeHistory = aiHub.loadSimulationHistory(STOCK_ID, historyData);
+        if (modeHistory != null && !modeHistory.isEmpty() && modeHistory != historyData) {
+            historyData.clear();
+            historyData.addAll(modeHistory);
+            dayIndex = 0;
+        }
+
         if (historyData == null || dayIndex >= historyData.size()) {
             return;
         }
@@ -349,7 +361,7 @@ public class MainApp extends Application {
         title.setStyle("-fx-font-size: 18px; -fx-font-weight: bold; -fx-text-fill: #adbac7;");
 
         marketModeBox.getItems().addAll(MarketMode.REALTIME, MarketMode.HISTORY, MarketMode.AI_RANDOM);
-        marketModeBox.setValue(MarketMode.HISTORY);
+        marketModeBox.setValue(aiHub.getMarketMode());
         marketModeBox.setOnAction(e -> aiHub.setMarketMode(marketModeBox.getValue()));
 
         aiQuestionField.setPromptText("輸入問題，例如：我現在的持倉風險大嗎？");
@@ -367,9 +379,13 @@ public class MainApp extends Application {
         Button summaryBtn = new Button("交易摘要");
         summaryBtn.getStyleClass().addAll(Styles.BUTTON_OUTLINED);
 
+        Button updateDataBtn = new Button("更新市場資料");
+        updateDataBtn.getStyleClass().addAll(Styles.BUTTON_OUTLINED);
+
         askBtn.setOnAction(e -> handleAiAsk());
         analyzeBtn.setOnAction(e -> handleAiAnalyze());
         summaryBtn.setOnAction(e -> handleAiSummary());
+        updateDataBtn.setOnAction(e -> handleMarketDataUpdate());
 
         HBox btnRow = new HBox(10, askBtn, analyzeBtn, summaryBtn);
 
@@ -380,6 +396,7 @@ public class MainApp extends Application {
                 new Label("提問"),
                 aiQuestionField,
                 btnRow,
+                updateDataBtn,
                 new Label("AI 回應"),
                 aiOutputArea
         );
@@ -415,7 +432,7 @@ public class MainApp extends Application {
                         user,
                         tradingEngine,
                         historyData,
-                        "TestDataTSMC",
+                        STOCK_ID,
                         getCurrentPriceValue(),
                         question
                 )
@@ -428,7 +445,7 @@ public class MainApp extends Application {
                         user,
                         tradingEngine,
                         historyData,
-                        "TestDataTSMC",
+                        STOCK_ID,
                         getCurrentPriceValue()
                 )
         );
@@ -440,10 +457,23 @@ public class MainApp extends Application {
                         user,
                         tradingEngine,
                         historyData,
-                        "TestDataTSMC",
+                        STOCK_ID,
                         getCurrentPriceValue()
                 )
         );
+    }
+
+    private void handleMarketDataUpdate() {
+        runAiTask("正在更新市場資料庫：" + aiHub.getMarketDatabasePath() + "...", () -> {
+            MarketDataUpdateResult result = aiHub.updateHistoricalData(STOCK_ID);
+            return "市場資料更新完成\n"
+                    + "資料庫位置：" + aiHub.getMarketDatabasePath() + "\n"
+                    + "股票代號：" + result.getStockId() + "\n"
+                    + "更新範圍：" + result.getFromDate() + " 到 " + result.getToDate() + "\n"
+                    + "擷取筆數：" + result.getFetchedCount() + "\n"
+                    + "寫入筆數：" + result.getSavedCount() + "\n"
+                    + result.getMessage();
+        });
     }
 
     private void runAiTask(String loadingText, Callable<String> action) {

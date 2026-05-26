@@ -4,6 +4,7 @@ C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\StockDat
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\StockHoldings.java
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\TradeRecord.java
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\gui\MainApp.java
+C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\ai\data\TwseHistoricalDataClient.java
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\CsvLoading.java
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\gui\WelcomeUI.java
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\ai\data\HistoricalDataRepository.java
@@ -25,6 +26,7 @@ C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\ai\clien
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\ai\mode\MarketMode.java
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\SaveManager.java
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\SettlementManager.java
+C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\ai\data\MarketDataUpdateResult.java
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\gui\MainController.java
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\ai\assistant\MarketAnalysisAssistant.java
 C:\Users\wwumi\Documents\GitHub\StockBucks\src\main\java\com\stockbucks\ai\client\LocalModelClient.java

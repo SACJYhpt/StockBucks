@@ -1,39 +1,50 @@
 package com.stockbucks.ai.mode;
 
 import com.stockbucks.StockData;
-import com.stockbucks.ai.data.HistoricalDataRepository;
+import com.stockbucks.ai.data.MarketDataService;
+import com.stockbucks.ai.data.MarketDataUpdateResult;
 import com.stockbucks.ai.model.MarketSnapshot;
 
 import java.util.List;
 
 public class HistoryMode {
 
-    private final HistoricalDataRepository repository;
+    private final MarketDataService marketDataService;
 
-    public HistoryMode(HistoricalDataRepository repository) {
-        this.repository = repository;
+    public HistoryMode(MarketDataService marketDataService) {
+        this.marketDataService = marketDataService;
     }
 
     public MarketSnapshot getSnapshot(String stockId, List<StockData> historyData, double currentPrice) {
-        String latestDate = "N/A";
-        if (historyData != null && !historyData.isEmpty()) {
-            latestDate = historyData.get(historyData.size() - 1).getDate();
+        List<StockData> effectiveHistory = historyData;
+        if (effectiveHistory == null || effectiveHistory.isEmpty()) {
+            effectiveHistory = marketDataService.loadOrUpdateHistory(stockId);
         }
 
+        String latestDate = "N/A";
+        if (!effectiveHistory.isEmpty()) {
+            latestDate = effectiveHistory.get(effectiveHistory.size() - 1).getDate();
+        }
+
+        int cachedCount = marketDataService.countHistoricalData(stockId);
         return new MarketSnapshot(
                 stockId,
                 latestDate,
                 "歷史資料模式",
                 currentPrice,
-                "歷史資料模式：可使用 CSV 或 SQLite 中的歷史資料"
+                "SQLite 快取筆數：" + cachedCount
         );
     }
 
+    public MarketDataUpdateResult updateHistory(String stockId) {
+        return marketDataService.updateHistoricalData(stockId);
+    }
+
     public void saveHistory(List<StockData> historyData) {
-        repository.saveAll(historyData);
+        marketDataService.saveHistoricalData(historyData);
     }
 
     public List<StockData> loadHistory(String stockId) {
-        return repository.findByStockId(stockId);
+        return marketDataService.getHistoricalData(stockId);
     }
 }

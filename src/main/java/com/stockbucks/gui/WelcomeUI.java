@@ -98,6 +98,10 @@ public class WelcomeUI {
         Button confirmLoadBtn = new Button("載入檔案");
         confirmLoadBtn.getStyleClass().add(Styles.SUCCESS);
         confirmLoadBtn.disableProperty().bind(archiveListView.getSelectionModel().selectedItemProperty().isNull());
+
+        Button deleteBtn = new Button("刪除檔案");
+        deleteBtn.getStyleClass().addAll(Styles.DANGER, Styles.BUTTON_OUTLINED);
+        deleteBtn.disableProperty().bind(archiveListView.getSelectionModel().selectedItemProperty().isNull());
         
         confirmLoadBtn.setOnAction(e -> {
             String selectedFile = archiveListView.getSelectionModel().getSelectedItem();
@@ -111,7 +115,14 @@ public class WelcomeUI {
             }
         });
 
-        btnBox.getChildren().addAll(backBtn, confirmLoadBtn);
+        deleteBtn.setOnAction(e -> {
+            String selectedFile = archiveListView.getSelectionModel().getSelectedItem();
+            if (selectedFile != null && SaveManager.deleteGame(selectedFile)) {
+                archiveListView.getItems().remove(selectedFile);
+            }
+        });
+
+        btnBox.getChildren().addAll(backBtn, confirmLoadBtn, deleteBtn);
         archiveRoot.getChildren().addAll(headerLabel, archiveListView, btnBox);
         
         // 直接替換當前場景的 Root 節點，視覺流暢不閃爍

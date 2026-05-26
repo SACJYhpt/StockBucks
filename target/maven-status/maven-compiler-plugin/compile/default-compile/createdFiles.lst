@@ -3,6 +3,7 @@ com\stockbucks\TradeHistory.class
 com\stockbucks\SaveManager.class
 com\stockbucks\ai\data\MarketDataService.class
 com\stockbucks\ai\AIHub$1.class
+com\stockbucks\ai\data\TwseHistoricalDataClient.class
 com\stockbucks\User.class
 com\stockbucks\ai\mode\HistoryMode.class
 com\stockbucks\SettlementManager$Settlement.class
@@ -11,6 +12,7 @@ com\stockbucks\ai\assistant\MarketAnalysisAssistant.class
 com\stockbucks\ai\model\AiContext.class
 module-info.class
 com\stockbucks\ai\mode\MarketMode.class
+com\stockbucks\ai\data\MarketDataUpdateResult.class
 com\stockbucks\gui\CandleStickChart.class
 com\stockbucks\ai\assistant\QuestionAssistant.class
 com\stockbucks\StockHoldings.class

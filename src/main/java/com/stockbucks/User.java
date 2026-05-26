@@ -1,17 +1,20 @@
 package com.stockbucks;
-import java.util.List;
-import java.util.ArrayList;
+
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 
 public class User implements Serializable {
     private static final long serialVersionUID = 1L;
-    // 帳戶資料
-    private double cash = 1200000;
-    private HashMap <String, StockHoldings> holdings = new HashMap<>();
-    private SettlementManager settlement = new SettlementManager();
+    private static final double DEFAULT_INITIAL_CASH = 1_200_000;
 
+    private double initialCash = DEFAULT_INITIAL_CASH;
+    private double cash = DEFAULT_INITIAL_CASH;
+    private HashMap<String, StockHoldings> holdings = new HashMap<>();
+    private SettlementManager settlement = new SettlementManager();
     private List<TradeRecord> tradeHistory = new ArrayList<>();
+
     public List<TradeRecord> getTradeHistory() {
         return tradeHistory;
     }
@@ -19,13 +22,12 @@ public class User implements Serializable {
     public void addTradeRecord(TradeRecord record) {
         this.tradeHistory.add(record);
     }
-    
-    public void stockBuying(String stockID, int amount, double cost) {
+
+    public void stockBuying(String stockID, int amount, double averageCostPerShare) {
         if (!holdings.containsKey(stockID)) {
-            holdings.put(stockID, new StockHoldings(stockID, amount, cost));
-        }
-        else {
-            holdings.get(stockID).updateAdd(amount, cost);
+            holdings.put(stockID, new StockHoldings(stockID, amount, averageCostPerShare));
+        } else {
+            holdings.get(stockID).updateAdd(amount, averageCostPerShare);
         }
     }
 
@@ -50,30 +52,54 @@ public class User implements Serializable {
     public double getOnePresentValue(String stockID, double currentPrice) {
         StockHoldings data = holdings.get(stockID);
         if (data == null) return 0;
-        return data.getQuantity()*currentPrice;
+        return data.getQuantity() * currentPrice;
     }
 
     public double getOneNetWorth(String stockID, double currentPrice) {
         StockHoldings data = holdings.get(stockID);
         if (data == null) return 0;
-        return data.getQuantity()*currentPrice-data.getTotalCost();
+        return data.getQuantity() * currentPrice - data.getTotalCost();
     }
 
     public double getOneAveragePrice(String stockID) {
         StockHoldings data = holdings.get(stockID);
-        if (data == null) return 0;
-        return data.getTotalCost()/data.getQuantity();
+        if (data == null || data.getQuantity() == 0) return 0;
+        return data.getTotalCost() / data.getQuantity();
     }
 
-    public double getCash() {
+    public double getInitialCash() {
+        normalizeFinancialState();
+        return initialCash;
+    }
+
+    public double getAvailableCash() {
+        normalizeFinancialState();
         return cash;
     }
 
-    public void addCash(double amount) {
-        this.cash += amount;
-        if (this.cash < 0) {
-            System.out.println("違約交割，信用破產");
+    public double getCash() {
+        return getAvailableCash();
+    }
+
+    public boolean withdrawCash(double amount) {
+        normalizeFinancialState();
+        if (amount < 0) {
+            return false;
         }
+        if (cash < amount) {
+            return false;
+        }
+        cash -= amount;
+        return true;
+    }
+
+    public void depositCash(double amount) {
+        normalizeFinancialState();
+        this.cash += amount;
+    }
+
+    public void addCash(double amount) {
+        depositCash(amount);
     }
 
     public int getStockQuantity(String stockID) {
@@ -84,5 +110,11 @@ public class User implements Serializable {
 
     public SettlementManager getSettlementManager() {
         return settlement;
+    }
+
+    private void normalizeFinancialState() {
+        if (initialCash <= 0) {
+            initialCash = DEFAULT_INITIAL_CASH;
+        }
     }
 }
