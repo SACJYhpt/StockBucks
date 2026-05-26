@@ -29,6 +29,7 @@ public class TwseHistoricalDataClient {
             .appendValue(ChronoField.DAY_OF_MONTH, 1, 2, java.time.format.SignStyle.NOT_NEGATIVE)
             .toFormatter();
     private static final String STOCK_DAY_URL = "https://www.twse.com.tw/exchangeReport/STOCK_DAY";
+    private static final String STOCK_DAY_ALL_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL";
 
     private final HttpClient httpClient;
 
@@ -91,6 +92,29 @@ public class TwseHistoricalDataClient {
         }
     }
 
+    public List<StockProfile> fetchListedStockProfiles() {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(STOCK_DAY_ALL_URL))
+                .timeout(Duration.ofSeconds(30))
+                .header("Accept", "application/json")
+                .header("User-Agent", "StockBucks/1.0")
+                .GET()
+                .build();
+
+        try {
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() != 200) {
+                throw new RuntimeException("TWSE HTTP " + response.statusCode() + ": " + response.body());
+            }
+            return parseStockProfiles(response.body());
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to fetch TWSE stock list: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("TWSE stock list fetch interrupted", e);
+        }
+    }
+
     private List<StockData> parseStockDayResponse(String stockId, String json) {
         List<StockData> result = new ArrayList<>();
         String dataArray = extractJsonArray(json, "\"data\"");
@@ -105,17 +129,125 @@ public class TwseHistoricalDataClient {
             }
 
             String date = convertRocDate(fields.get(0));
+            String volume = cleanNumber(fields.get(1));
+            String turnover = cleanNumber(fields.get(2));
             String open = cleanNumber(fields.get(3));
             String high = cleanNumber(fields.get(4));
             String low = cleanNumber(fields.get(5));
             String close = cleanNumber(fields.get(6));
+            String priceChange = fields.size() > 7 ? cleanNumber(fields.get(7)) : "0";
+            String transactionCount = fields.size() > 8 ? cleanNumber(fields.get(8)) : "0";
 
             if (!open.isBlank() && !high.isBlank() && !low.isBlank() && !close.isBlank()) {
-                result.add(new StockData(stockId, date, open, high, low, close));
+                result.add(new StockData(stockId, "", date, open, high, low, close, volume, turnover, transactionCount, priceChange));
             }
         }
 
         return result;
+    }
+
+    private List<StockProfile> parseStockProfiles(String json) {
+        List<StockProfile> result = new ArrayList<>();
+        for (String objectText : extractJsonObjects(json)) {
+            String code = firstNonBlank(
+                    extractJsonValue(objectText, "Code"),
+                    extractJsonValue(objectText, "證券代號")
+            );
+            String name = firstNonBlank(
+                    extractJsonValue(objectText, "Name"),
+                    extractJsonValue(objectText, "證券名稱")
+            );
+            if (isListedCommonStockCode(code)) {
+                result.add(new StockProfile(code, name, "TWSE"));
+            }
+        }
+        return result;
+    }
+
+    private boolean isListedCommonStockCode(String code) {
+        return code != null && code.matches("[1-9][0-9]{3}");
+    }
+
+    private List<String> extractJsonObjects(String json) {
+        List<String> objects = new ArrayList<>();
+        int depth = 0;
+        int objectStart = -1;
+        boolean inString = false;
+        boolean escaped = false;
+
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+            if (c == '{') {
+                if (depth == 0) {
+                    objectStart = i;
+                }
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0 && objectStart >= 0) {
+                    objects.add(json.substring(objectStart, i + 1));
+                    objectStart = -1;
+                }
+            }
+        }
+        return objects;
+    }
+
+    private String extractJsonValue(String objectText, String fieldName) {
+        String key = "\"" + fieldName + "\"";
+        int keyIndex = objectText.indexOf(key);
+        if (keyIndex < 0) {
+            return "";
+        }
+
+        int colon = objectText.indexOf(':', keyIndex + key.length());
+        if (colon < 0) {
+            return "";
+        }
+
+        int start = objectText.indexOf('"', colon);
+        if (start < 0) {
+            return "";
+        }
+
+        StringBuilder value = new StringBuilder();
+        boolean escaped = false;
+        for (int i = start + 1; i < objectText.length(); i++) {
+            char c = objectText.charAt(i);
+            if (escaped) {
+                value.append(c);
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                return value.toString();
+            }
+            value.append(c);
+        }
+        return "";
+    }
+
+    private String firstNonBlank(String first, String second) {
+        return first == null || first.isBlank() ? (second == null ? "" : second) : first;
     }
 
     private String extractJsonArray(String json, String key) {
@@ -253,7 +385,19 @@ public class TwseHistoricalDataClient {
     }
 
     private String cleanNumber(String value) {
-        return value.replace(",", "").replace("--", "").trim();
+        if (value == null) {
+            return "";
+        }
+        String cleaned = value
+                .replace(",", "")
+                .replace("+", "")
+                .replace("--", "")
+                .replaceAll("[^0-9.\\-]", "")
+                .trim();
+        if (cleaned.equals("-") || cleaned.equals(".")) {
+            return "";
+        }
+        return cleaned;
     }
 
     private void pauseBetweenRequests() {

@@ -22,6 +22,7 @@ import java.io.File;
 import java.time.LocalDate;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Consumer;
 
 public class AIHub {
 
@@ -88,6 +89,24 @@ public class AIHub {
 
     public MarketDataUpdateResult updateHistoricalData(String stockId, LocalDate fromDate, LocalDate toDate) {
         return marketDataService.updateHistoricalData(stockId, fromDate, toDate);
+    }
+
+    public MarketDataUpdateResult updateAllListedStocks(LocalDate fromDate, LocalDate toDate, int maxStocks) {
+        return marketDataService.updateAllListedStocks(fromDate, toDate, maxStocks);
+    }
+
+    public MarketDataUpdateResult updateAllListedStocks(LocalDate fromDate,
+                                                        LocalDate toDate,
+                                                        int maxStocks,
+                                                        Consumer<String> progressCallback) {
+        return marketDataService.updateAllListedStocks(fromDate, toDate, maxStocks, progressCallback);
+    }
+
+    public MarketDataUpdateResult backfillAllListedStocksYearByYear(int startYear,
+                                                                    int endYear,
+                                                                    int maxStocks,
+                                                                    Consumer<String> progressCallback) {
+        return marketDataService.backfillAllListedStocksYearByYear(startYear, endYear, maxStocks, progressCallback);
     }
 
     public List<StockData> loadSimulationHistory(String stockId, List<StockData> fallbackHistory) {

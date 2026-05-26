@@ -4,6 +4,7 @@ com\stockbucks\SaveManager.class
 com\stockbucks\ai\data\MarketDataService.class
 com\stockbucks\ai\AIHub$1.class
 com\stockbucks\ai\data\TwseHistoricalDataClient.class
+com\stockbucks\gui\MainApp$ProgressCallable.class
 com\stockbucks\User.class
 com\stockbucks\ai\mode\HistoryMode.class
 com\stockbucks\SettlementManager$Settlement.class
@@ -13,6 +14,7 @@ com\stockbucks\ai\model\AiContext.class
 module-info.class
 com\stockbucks\ai\mode\MarketMode.class
 com\stockbucks\ai\data\MarketDataUpdateResult.class
+com\stockbucks\ai\data\StockProfile.class
 com\stockbucks\gui\CandleStickChart.class
 com\stockbucks\ai\assistant\QuestionAssistant.class
 com\stockbucks\StockHoldings.class
@@ -31,6 +33,7 @@ com\stockbucks\PriceSimulator.class
 com\stockbucks\ai\client\ModelClient.class
 com\stockbucks\TradingEngine.class
 com\stockbucks\StockHoldings$HoldingsList.class
+com\stockbucks\gui\MainApp$2.class
 com\stockbucks\TradeRecord.class
 com\stockbucks\ai\data\SQLiteManager.class
 com\stockbucks\gui\MainApp.class

@@ -31,14 +31,15 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.function.Consumer;
 
 public class MainApp extends Application {
     private static final String STOCK_ID = "2330";
 
-    // 接收 WelcomeUI 傳遞過來的存檔資料
     private SaveData initialSaveData = null;
 
     private User user;
@@ -68,7 +69,6 @@ public class MainApp extends Application {
     private final TextArea aiOutputArea = new TextArea();
     private final ComboBox<MarketMode> marketModeBox = new ComboBox<>();
 
-    // 提供給 WelcomeUI 注入存檔資料的方法
     public void setInitialSaveData(SaveData data) {
         this.initialSaveData = data;
     }
@@ -77,7 +77,6 @@ public class MainApp extends Application {
     public void start(Stage stage) {
         Application.setUserAgentStylesheet(new PrimerDark().getUserAgentStylesheet());
 
-        // 1. 根據是否有舊存檔，初始化 User 與進度
         if (initialSaveData != null) {
             this.user = initialSaveData.getUser();
             this.dayIndex = initialSaveData.getDayIndex();
@@ -87,7 +86,6 @@ public class MainApp extends Application {
             this.dayIndex = 0;
         }
 
-        // 2. 初始化交易引擎與載入 CSV 數據
         List<String> globalCanlendar = csvLoader.loadGlobalCanlendar(STOCK_ID);
         this.tradingEngine = new TradingEngine(globalCanlendar);
 
@@ -95,10 +93,8 @@ public class MainApp extends Application {
             historyData.add(data);
         });
 
-        // 3. 將歷史資料快取給 AI 模組
         aiHub.cacheHistoryData(historyData);
 
-        // 4. 如果是舊存檔，把過去的交易紀錄同步到 UI 表格畫面上
         if (this.user.getTradeHistory() != null) {
             List<TradeRecord> pastRecords = this.user.getTradeHistory();
             for (int i = pastRecords.size() - 1; i >= 0; i--) {
@@ -122,7 +118,6 @@ public class MainApp extends Application {
             stage.setY(e.getScreenY() - yOffset);
         });
 
-        // --- Top Bar ---
         HBox topBar = new HBox(15);
         topBar.setAlignment(Pos.CENTER_LEFT);
         topBar.setPadding(new Insets(5, 10, 15, 10));
@@ -165,7 +160,6 @@ public class MainApp extends Application {
                 closeBtn
         );
 
-        // --- Center Layout ---
         VBox centerBox = new VBox(10);
         lineChart = createPriceChart();
 
@@ -175,7 +169,6 @@ public class MainApp extends Application {
 
         centerBox.getChildren().addAll(lineChart, historyTable);
 
-        // --- AI Panel ---
         VBox aiPanel = createAiPanel();
 
         root.setTop(topBar);
@@ -187,9 +180,6 @@ public class MainApp extends Application {
         stage.show();
     }
 
-    /**
-     * 觸發存檔對話框
-     */
     private void handleSaveGame() {
         TextInputDialog dialog = new TextInputDialog("mysave");
         dialog.setTitle("儲存模擬進度");
@@ -382,10 +372,14 @@ public class MainApp extends Application {
         Button updateDataBtn = new Button("更新市場資料");
         updateDataBtn.getStyleClass().addAll(Styles.BUTTON_OUTLINED);
 
+        Button updateAllDataBtn = new Button("逐年回補上市股票資料");
+        updateAllDataBtn.getStyleClass().addAll(Styles.BUTTON_OUTLINED);
+
         askBtn.setOnAction(e -> handleAiAsk());
         analyzeBtn.setOnAction(e -> handleAiAnalyze());
         summaryBtn.setOnAction(e -> handleAiSummary());
         updateDataBtn.setOnAction(e -> handleMarketDataUpdate());
+        updateAllDataBtn.setOnAction(e -> handleAllMarketDataUpdateWithProgress());
 
         HBox btnRow = new HBox(10, askBtn, analyzeBtn, summaryBtn);
 
@@ -397,6 +391,7 @@ public class MainApp extends Application {
                 aiQuestionField,
                 btnRow,
                 updateDataBtn,
+                updateAllDataBtn,
                 new Label("AI 回應"),
                 aiOutputArea
         );
@@ -476,6 +471,33 @@ public class MainApp extends Application {
         });
     }
 
+    private void handleAllMarketDataUpdateWithProgress() {
+        runAiTaskWithProgress("正在逐年回補上市股票資料，請稍候...", progress -> {
+            int currentYear = LocalDate.now().getYear();
+            MarketDataUpdateResult result = aiHub.backfillAllListedStocksYearByYear(2010, currentYear, 0, progress);
+            return "上市股票逐年回補完成\n"
+                    + "資料庫位置：" + aiHub.getMarketDatabasePath() + "\n"
+                    + "更新範圍：" + result.getFromDate() + " 到 " + result.getToDate() + "\n"
+                    + "擷取筆數：" + result.getFetchedCount() + "\n"
+                    + "寫入筆數：" + result.getSavedCount() + "\n"
+                    + result.getMessage();
+        });
+    }
+
+    private void handleAllMarketDataUpdate() {
+        runAiTask("正在更新全部上市股票近期資料，請稍候...", () -> {
+            LocalDate toDate = LocalDate.now();
+            LocalDate fromDate = toDate.minusDays(30);
+            MarketDataUpdateResult result = aiHub.updateAllListedStocks(fromDate, toDate, 0);
+            return "全部上市股票近期資料更新完成\n"
+                    + "資料庫位置：" + aiHub.getMarketDatabasePath() + "\n"
+                    + "更新範圍：" + result.getFromDate() + " 到 " + result.getToDate() + "\n"
+                    + "擷取筆數：" + result.getFetchedCount() + "\n"
+                    + "寫入筆數：" + result.getSavedCount() + "\n"
+                    + result.getMessage();
+        });
+    }
+
     private void runAiTask(String loadingText, Callable<String> action) {
         aiOutputArea.setText(loadingText);
 
@@ -492,6 +514,29 @@ public class MainApp extends Application {
         Thread thread = new Thread(task);
         thread.setDaemon(true);
         thread.start();
+    }
+
+    private void runAiTaskWithProgress(String loadingText, ProgressCallable action) {
+        aiOutputArea.setText(loadingText);
+
+        Task<String> task = new Task<>() {
+            @Override
+            protected String call() throws Exception {
+                return action.call(message -> Platform.runLater(() -> aiOutputArea.setText(message)));
+            }
+        };
+
+        task.setOnSucceeded(e -> aiOutputArea.setText(task.getValue()));
+        task.setOnFailed(e -> aiOutputArea.setText("[AI 執行失敗] " + task.getException().getMessage()));
+
+        Thread thread = new Thread(task);
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    @FunctionalInterface
+    private interface ProgressCallable {
+        String call(Consumer<String> progress) throws Exception;
     }
 
     private void showWarning(String msg) {
