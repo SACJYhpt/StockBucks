@@ -4,6 +4,7 @@ module com.stockbucks {
     requires java.sql;
     requires java.net.http;
     requires atlantafx.base;
+    requires javafx.graphics;
 
     opens com.stockbucks.gui to javafx.graphics, javafx.base;
     opens com.stockbucks to javafx.base;
