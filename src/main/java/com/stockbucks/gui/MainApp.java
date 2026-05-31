@@ -63,6 +63,11 @@ public class MainApp extends Application {
     private VBox assetView;
     private VBox orderListView;
 
+    // 最愛清單資料結構：Key 是分頁名稱，Value 是該分頁裡的股票列表
+    private java.util.LinkedHashMap<String, ObservableList<String>> watchlistData = new java.util.LinkedHashMap<>();
+    private TabPane marketTabPane = new TabPane();
+    private TextField marketSearchField = new TextField();
+
     // 定義選單 Enum
     private enum MenuType {
         MARKET("📈  市場行情", "📈"),
@@ -106,6 +111,12 @@ public class MainApp extends Application {
                 observableRecords.add(pastRecords.get(i));
             }
         }
+
+        if (!watchlistData.containsKey("全部最愛")) {
+            watchlistData.put("全部最愛", FXCollections.observableArrayList());
+        }
+        // 測試假資料：
+        watchlistData.get("全部最愛").addAll("元大台灣50", "富邦科技 0052", "國泰台灣科技", "台積電 2330");
         
         setupTable();
         updateInfoLabel();
@@ -136,49 +147,105 @@ public class MainApp extends Application {
      * 初始化四大主要功能畫面
      */
     private void initAllViews() {
-        // 【1. 市場行情】仿國泰方格行情佈局
+        // 【1. 市場行情】
         marketView = new StackPane();
-        GridPane grid = new GridPane();
-        grid.setHgap(15);
-        grid.setVgap(15);
-        grid.setAlignment(Pos.CENTER);
+        VBox marketLayout = new VBox(15);
+        marketLayout.setPadding(new Insets(10));
+
+        // ===== (A) 頂部搜尋與加入最愛功能列 =====
+        HBox marketTopBar = new HBox(10);
+        marketTopBar.setAlignment(Pos.CENTER_LEFT);
+
+        marketSearchField.setPromptText("🔍 輸入公司名稱或代碼... (例如: 台積電 或 2330)");
+        marketSearchField.setPrefWidth(400);
+        marketSearchField.getStyleClass().add(Styles.ROUNDED);
+
+        Button addToFavoriteBtn = new Button("⭐ 加入最愛");
+        addToFavoriteBtn.getStyleClass().add(Styles.ACCENT);
         
-        // 快捷建立測試用卡片（未來可依據不同 stockId 動態建構）
-        String[] stocks = {"元大台灣50", "富邦科技 0052", "國泰台灣科技", "台積電 2330"};
-        int col = 0, row = 0;
-        for (String name : stocks) {
-            VBox card = new VBox(10);
-            card.setStyle("-fx-background-color: #2d333b; -fx-border-color: #444; -fx-border-radius: 8; -fx-background-radius: 8;");
-            card.setPadding(new Insets(20));
-            card.setPrefSize(220, 150);
-            card.setAlignment(Pos.CENTER);
-            
-            Label lblName = new Label(name);
-            lblName.getStyleClass().add(Styles.TITLE_4);
-            Label lblPrice = new Label("#100.65"); // 假資料示意
-            lblPrice.setStyle("-fx-text-fill: #ea4335; -fx-font-size: 24px; -fx-font-weight: bold;");
-            
-            card.getChildren().addAll(lblName, lblPrice);
-            // 💡 點擊卡片後直接切換到「下單交易」
-            card.setOnMouseClicked(e -> switchView(MenuType.TRADE));
-            
-            grid.add(card, col, row);
-            col++; if (col > 1) { col = 0; row++; }
-        }
-        marketView.getChildren().add(grid);
+        marketTopBar.getChildren().addAll(marketSearchField, addToFavoriteBtn);
+
+        // ===== (B) 中央多功能分頁系統 (TabPane) =====
+        marketTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE); // 預設不能關閉
+        
+        // 重新渲染所有分頁的按鈕
+        refreshWatchlistTabs();
+
+        // 綁定「加入最愛」的按鈕邏輯
+        addToFavoriteBtn.setOnAction(e -> {
+            String stockInput = marketSearchField.getText().trim();
+            if (stockInput.isEmpty()) {
+                showWarning("請輸入公司名稱或代碼！");
+                return;
+            }
+
+            // 獲取當前使用者切換到哪一個分頁
+            Tab currentTab = marketTabPane.getSelectionModel().getSelectedItem();
+            if (currentTab == null) return;
+            String currentTabName = currentTab.getText();
+
+            // 1. 無論在哪個分頁加，都必須同步放進「全部最愛」
+            ObservableList<String> allList = watchlistData.get("全部最愛");
+            if (!allList.contains(stockInput)) {
+                allList.add(stockInput);
+            }
+
+            // 2. 如果目前不是在第一頁，也要放進當前的自訂分頁中
+            if (!currentTabName.equals("全部最愛")) {
+                ObservableList<String> subList = watchlistData.get(currentTabName);
+                if (subList != null && !subList.contains(stockInput)) {
+                    subList.add(stockInput);
+                }
+            }
+
+            marketSearchField.clear();
+            refreshWatchlistTabs(); // 刷新 UI 畫面，字卡立刻跳出來
+        });
+
+        VBox.setVgrow(marketTabPane, Priority.ALWAYS);
+        marketLayout.getChildren().addAll(marketTopBar, marketTabPane);
+        marketView.getChildren().add(marketLayout);
 
         // 【2. 下單交易】把原本的主程式畫面完整塞在這裡
         tradeView = new BorderPane();
-        
-        HBox topBar = new HBox(15);
-        topBar.setAlignment(Pos.CENTER_LEFT);
-        topBar.setPadding(new Insets(5, 0, 15, 0));
+        tradeView.setPadding(new Insets(10));
+
+        // --- (A) 頂部搜尋與控制列 ---
+        HBox topSearchBar = new HBox(15);
+        topSearchBar.setAlignment(Pos.CENTER_LEFT);
+        topSearchBar.setPadding(new Insets(0, 0, 15, 0));
+
+        // 搜尋輸入框 (仿 image_b34f08.jpg 上方搜尋欄)
+        TextField stockSearchField = new TextField();
+        stockSearchField.setPromptText("🔍 搜尋股票、名稱或代碼...");
+        stockSearchField.setPrefWidth(400);
+        stockSearchField.getStyleClass().add(Styles.ROUNDED); // 讓邊角變圓
 
         Button startBtn = new Button("開始模擬");
         startBtn.getStyleClass().add(Styles.ACCENT);
         startBtn.setOnAction(e -> handleStartSimulation());
 
-        sharesField.setPrefWidth(80);
+        Button saveBtn = new Button("儲存模擬");
+        saveBtn.getStyleClass().addAll(Styles.ACCENT, Styles.BUTTON_OUTLINED);
+        saveBtn.setOnAction(e -> handleSaveGame());
+
+        Region topSpacer = new Region();
+        HBox.setHgrow(topSpacer, Priority.ALWAYS);
+
+        topSearchBar.getChildren().addAll(stockSearchField, startBtn, saveBtn, topSpacer, currentPriceLabel);
+
+        // --- (B) 中間圖表與交易控制區 ---
+        VBox centerArea = new VBox(10);
+        lineChart = createPriceChart();
+        VBox.setVgrow(lineChart, Priority.ALWAYS);
+
+        // 交易控制面板 (放在圖表下方)
+        HBox tradeControlPanel = new HBox(15);
+        tradeControlPanel.setAlignment(Pos.CENTER_LEFT);
+        tradeControlPanel.setPadding(new Insets(10));
+        tradeControlPanel.setStyle("-fx-background-color: #2d333b; -fx-background-radius: 8;");
+
+        sharesField.setPrefWidth(100);
         Button buyBtn = new Button("買入");
         buyBtn.getStyleClass().addAll(Styles.SUCCESS, Styles.BUTTON_OUTLINED);
         buyBtn.setOnAction(e -> handleTrade(true));
@@ -187,18 +254,38 @@ public class MainApp extends Application {
         sellBtn.getStyleClass().addAll(Styles.DANGER, Styles.BUTTON_OUTLINED);
         sellBtn.setOnAction(e -> handleTrade(false));
 
-        Button saveBtn = new Button("儲存模擬");
-        saveBtn.getStyleClass().addAll(Styles.ACCENT, Styles.BUTTON_OUTLINED);
-        saveBtn.setOnAction(e -> handleSaveGame());
+        tradeControlPanel.getChildren().addAll(new Label("交易股數:"), sharesField, buyBtn, sellBtn, new Separator(javafx.geometry.Orientation.VERTICAL), infoLabel);
+        
+        centerArea.getChildren().addAll(lineChart, tradeControlPanel);
 
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
+        // --- (C) 右側 AI 問答區塊 (仿 image_b34f08.jpg 右側「研究」欄位) ---
+        VBox aiSection = new VBox(15);
+        aiSection.setPrefWidth(300);
+        aiSection.setPadding(new Insets(0, 0, 0, 15));
+        aiSection.setStyle("-fx-border-color: #30363d; -fx-border-width: 0 0 0 1;"); // 左邊界線
 
-        topBar.getChildren().addAll(startBtn, new Label("股數:"), sharesField, buyBtn, sellBtn, saveBtn, currentPriceLabel, spacer, infoLabel);
+        Label aiTitle = new Label("AI 投資助理");
+        aiTitle.getStyleClass().add(Styles.TITLE_3);
 
-        lineChart = createPriceChart();
-        tradeView.setTop(topBar);
-        tradeView.setCenter(lineChart);
+        TextArea aiChatArea = new TextArea();
+        aiChatArea.setEditable(false);
+        aiChatArea.setWrapText(true);
+        aiChatArea.setPromptText("AI 分析建議將顯示於此...");
+        VBox.setVgrow(aiChatArea, Priority.ALWAYS);
+
+        TextField aiInputField = new TextField();
+        aiInputField.setPromptText("提出財經問題...");
+        
+        Button askBtn = new Button("發送");
+        askBtn.getStyleClass().add(Styles.ACCENT);
+        askBtn.setMaxWidth(Double.MAX_VALUE);
+
+        aiSection.getChildren().addAll(aiTitle, aiChatArea, aiInputField, askBtn);
+
+        // --- 組合 ---
+        tradeView.setTop(topSearchBar);
+        tradeView.setCenter(centerArea);
+        tradeView.setRight(aiSection);
 
         // 【3. 帳務總覽】
         assetView = new VBox(20);
@@ -423,6 +510,179 @@ public class MainApp extends Application {
         }));
         timeline.setCycleCount(Animation.INDEFINITE);
         timeline.play();
+    }
+
+    private void refreshWatchlistTabs() {
+        // 記錄當前使用者選中的分頁名稱，避免重整後焦點跑掉
+        String selectedTabName = marketTabPane.getSelectionModel().getSelectedItem() != null 
+                ? marketTabPane.getSelectionModel().getSelectedItem().getText() : "全部最愛";
+
+        marketTabPane.getTabs().clear();
+
+        // 1. 根據資料結構中的每一個 Key，建立對應的 Tab
+        for (String tabName : watchlistData.keySet()) {
+            Tab tab = new Tab(tabName);
+            
+            // 建立這個分頁專屬的卡片網格佈局
+            ScrollPane scrollPane = new ScrollPane();
+            scrollPane.setFitToWidth(true);
+            scrollPane.setStyle("-fx-background: #22272e; -fx-background-color: #22272e;");
+
+            GridPane grid = new GridPane();
+            grid.setHgap(15);
+            grid.setVgap(15);
+            grid.setPadding(new Insets(15));
+
+            ObservableList<String> stocksInTab = watchlistData.get(tabName);
+            int col = 0, row = 0;
+            
+            for (String stockName : stocksInTab) {
+                // 建立股票字卡 (仿國泰方格佈局)
+                AnchorPane cardContainer = new AnchorPane();
+                
+                VBox card = new VBox(10);
+                card.setStyle("-fx-background-color: #2d333b; -fx-border-color: #444; -fx-border-radius: 8; -fx-background-radius: 8;");
+                card.setPadding(new Insets(20));
+                card.setPrefSize(220, 150);
+                card.setAlignment(Pos.CENTER);
+
+                Label lblName = new Label(stockName);
+                lblName.getStyleClass().add(Styles.TITLE_4);
+                
+                // 模擬隨機價格與漲跌幅
+                double mockPrice = 50 + Math.random() * 500;
+                double mockPercent = -5 + Math.random() * 10;
+                
+                Label lblPrice = new Label(String.format("$%.2f", mockPrice));
+                lblPrice.setStyle(mockPercent >= 0 
+                    ? "-fx-text-fill: #ea4335; -fx-font-size: 24px; -fx-font-weight: bold;" 
+                    : "-fx-text-fill: #34a853; -fx-font-size: 24px; -fx-font-weight: bold;");
+
+                Label lblPercent = new Label(String.format("%s%.2f%%", mockPercent >= 0 ? "+" : "", mockPercent));
+                lblPercent.setStyle(mockPercent >= 0 ? "-fx-text-fill: #ea4335;" : "-fx-text-fill: #34a853;");
+
+                card.getChildren().addAll(lblName, lblPrice, lblPercent);
+                
+                // 點擊字卡本體切換到交易頁面
+                card.setOnMouseClicked(e -> switchView(MenuType.TRADE));
+
+                // 2.刪除按鈕
+                Button deleteBtn = new Button();
+                deleteBtn.getStyleClass().addAll(Styles.BUTTON_CIRCLE, Styles.FLAT, Styles.DANGER);
+                deleteBtn.setStyle("-fx-font-size: 10px; -fx-padding: 2 6 2 6;"); // 縮小按鈕尺寸
+                
+                // 用 JavaFX 原生線條畫出一個簡單的小 X
+                javafx.scene.shape.SVGPath xIcon = new javafx.scene.shape.SVGPath();
+                xIcon.setContent("M18 6L6 18M6 6l12 12");
+                xIcon.setStroke(javafx.scene.paint.Color.web("#a59d9d"));
+                xIcon.setStrokeWidth(1.5);
+                deleteBtn.setGraphic(xIcon);
+
+                // 3.實作刪除按鈕的點擊邏輯
+                deleteBtn.setOnAction(e -> {
+                    // 防止點擊刪除按鈕時，同時觸發 VBox 的切換頁面事件（阻斷事件冒泡）
+                    e.consume(); 
+
+                    if (tabName.equals("全部最愛")) {
+                        // A 邏輯：在全部最愛刪除 -> 從「所有群組」中徹底拔除該個股
+                        for (String key : watchlistData.keySet()) {
+                            watchlistData.get(key).remove(stockName);
+                        }
+                    } else {
+                        // B 邏輯：在特定群組刪除 -> 僅移出該分頁，保留在全部最愛中
+                        watchlistData.get(tabName).remove(stockName);
+                    }
+
+                    // 重新重整分頁 UI，讓被刪除的字卡平滑消失
+                    refreshWatchlistTabs();
+                });
+
+                // 4. 將字卡本體與刪除按鈕裝進 Container 中，並設定 X 按鈕靠右上角定位
+                AnchorPane.setTopAnchor(card, 0.0);
+                AnchorPane.setLeftAnchor(card, 0.0);
+                AnchorPane.setRightAnchor(card, 0.0);
+                AnchorPane.setBottomAnchor(card, 0.0);
+
+                AnchorPane.setTopAnchor(deleteBtn, 5.0);
+                AnchorPane.setRightAnchor(deleteBtn, 5.0);
+
+                cardContainer.getChildren().addAll(card, deleteBtn);
+
+                // 5. 將原本塞進 grid 的物件換成新包裝好的 container
+                grid.add(cardContainer, col, row);
+                
+                col++; 
+                if (col > 3) { 
+                    col = 0; 
+                    row++; 
+                }
+            }
+
+            scrollPane.setContent(grid);
+            tab.setContent(scrollPane);
+            marketTabPane.getTabs().add(tab);
+            
+            // 恢復原本選取的分頁焦點
+            if (tabName.equals(selectedTabName)) {
+                marketTabPane.getSelectionModel().select(tab);
+            }
+        }
+
+        // 2. 建立最後一頁：特殊「+」號按鈕分頁
+        Tab addTab = new Tab("＋");
+        marketTabPane.getTabs().add(addTab);
+
+        // 監聽分頁切換事件：當點到「＋」號時，觸發新增分頁對話框
+        marketTabPane.getSelectionModel().selectedItemProperty().addListener((observable, oldTab, newTab) -> {
+            if (newTab != null && newTab.getText().equals("＋")) {
+                Platform.runLater(() -> handleAddNewWatchlistPage());
+            }
+        });
+    }
+
+    /**
+     * 處理使用者點擊「＋」號新增並命名新分頁
+     */
+    private void handleAddNewWatchlistPage() {
+        TextInputDialog dialog = new TextInputDialog("行動自選" + watchlistData.size());
+        dialog.setTitle("新增自選股分頁");
+        dialog.setHeaderText("建立專屬的股票投資清單");
+        dialog.setContentText("請輸入新分頁的名稱:");
+        dialog.getDialogPane().setStyle("-fx-background-color: #1c2128;");
+
+        dialog.showAndWait().ifPresent(pageName -> {
+            String trimmedName = pageName.trim();
+            if (trimmedName.isEmpty() || trimmedName.equals("＋")) {
+                showWarning("分頁名稱無效！");
+                refreshWatchlistTabs(); // 跳回原分頁
+                return;
+            }
+            if (watchlistData.containsKey(trimmedName)) {
+                showWarning("分頁名稱已存在！");
+                refreshWatchlistTabs();
+                return;
+            }
+
+            // 新增空的分頁清單到資料結構中
+            watchlistData.put(trimmedName, FXCollections.observableArrayList());
+            
+            // 重新渲染，並將焦點自動選中新建立的分頁
+            marketTabPane.getSelectionModel().clearSelection();
+            refreshWatchlistTabs();
+            
+            // 找到剛建好的分頁並選中它
+            for (Tab t : marketTabPane.getTabs()) {
+                if (t.getText().equals(trimmedName)) {
+                    marketTabPane.getSelectionModel().select(t);
+                    break;
+                }
+            }
+        });
+        
+        // 如果使用者點取消，重整以確保焦點不會卡在「＋」上面
+        if (!dialog.isShowing() && marketTabPane.getSelectionModel().getSelectedItem().getText().equals("＋")) {
+            marketTabPane.getSelectionModel().select(0);
+        }
     }
 
     private void showWarning(String msg) {
