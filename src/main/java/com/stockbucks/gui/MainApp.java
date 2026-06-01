@@ -49,6 +49,7 @@ public class MainApp extends Application {
     private int tickCount = 0;
     private List<StockData> historyData = new ArrayList<>();
     private int dayIndex = 0;
+    private com.stockbucks.ai.mode.MarketMode marketMode = com.stockbucks.ai.mode.MarketMode.HISTORY;
     private Timeline timeline;
 
     //  側邊欄核心元件
@@ -95,9 +96,26 @@ public class MainApp extends Application {
         if (initialSaveData != null) {
             this.user = initialSaveData.getUser();
             this.dayIndex = initialSaveData.getDayIndex();
+            this.marketMode = initialSaveData.getMarketMode();
+            //讀取存檔：還原自選股分頁與字卡
+            if (initialSaveData.getSerializableWatchlist() != null) {
+                watchlistData.clear(); // 清空預設值
+                java.util.LinkedHashMap<String, ArrayList<String>> loadedWatchlist = initialSaveData.getSerializableWatchlist();
+                for (String key : loadedWatchlist.keySet()) {
+                    // 將 ArrayList 轉回 JavaFX 專用的 ObservableList
+                    watchlistData.put(key, FXCollections.observableArrayList(loadedWatchlist.get(key)));
+                }
+            }
         } else {
             this.user = new User();
             this.dayIndex = 0;
+            this.marketMode = com.stockbucks.ai.mode.MarketMode.HISTORY;
+        }
+
+        //如果是全新開局，或是舊存檔完全沒有自選股資料，才初始化預設的「全部最愛」
+        if (!watchlistData.containsKey("全部最愛")) {
+            watchlistData.put("全部最愛", FXCollections.observableArrayList());
+            watchlistData.get("全部最愛").addAll("元大台灣50", "富邦科技 0052", "國泰台灣科技", "台積電 2330");
         }
 
         List<String> globalCanlendar = csvLoader.loadGlobalCanlendar("TestDataTSMC");
@@ -111,12 +129,6 @@ public class MainApp extends Application {
                 observableRecords.add(pastRecords.get(i));
             }
         }
-
-        if (!watchlistData.containsKey("全部最愛")) {
-            watchlistData.put("全部最愛", FXCollections.observableArrayList());
-        }
-        // 測試假資料：
-        watchlistData.get("全部最愛").addAll("元大台灣50", "富邦科技 0052", "國泰台灣科技", "台積電 2330");
         
         setupTable();
         updateInfoLabel();
@@ -412,7 +424,11 @@ public class MainApp extends Application {
         File dir = new File("saves");
         if (!dir.exists()) dir.mkdir();
         try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(new File(dir, fileName + ".dat")))) {
-            SaveData data = new SaveData(this.user, this.dayIndex, fileName);
+            java.util.LinkedHashMap<String, ArrayList<String>> saveWatchlist = new java.util.LinkedHashMap<>();
+            for (String key : watchlistData.keySet()) {
+                saveWatchlist.put(key, new ArrayList<>(watchlistData.get(key)));
+            }
+            SaveData data = new SaveData(this.user, this.dayIndex, fileName, this.marketMode, saveWatchlist);
             oos.writeObject(data);
         } catch (IOException e) {
             e.printStackTrace();
