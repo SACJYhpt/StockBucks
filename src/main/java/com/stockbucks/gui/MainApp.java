@@ -38,6 +38,7 @@ public class MainApp extends Application {
     
     // UI 控制元件（下單交易視窗用）
     private TableView<TradeRecord> historyTable = new TableView<>();
+    private TableView<String> activeOrderTable = new TableView<>();
     private ObservableList<TradeRecord> observableRecords = FXCollections.observableArrayList();
     private Label currentPriceLabel = new Label("當前市價: --");
     private Label infoLabel = new Label();
@@ -311,11 +312,50 @@ public class MainApp extends Application {
 
         // 【4. 委託清單】把歷史交易表格放在獨立畫面
         orderListView = new VBox(15);
-        orderListView.setPadding(new Insets(10));
+        orderListView.setPadding(new Insets(15));
         Label orderTitle = new Label("📜 歷史成交與委託明細");
         orderTitle.getStyleClass().add(Styles.TITLE_2);
+        orderListView.getChildren().addAll(orderTitle, new Separator());
+
+        // 建立獨立的 TabPane
+        TabPane orderTabPane = new TabPane();
+        orderTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE); // 禁用關閉功能
+        VBox.setVgrow(orderTabPane, Priority.ALWAYS);
+
+        // ===== 分頁一：現存委託 (未成交) =====
+        Tab activeOrderTab = new Tab("⏳ 現存委託");
+        VBox activeOrderLayout = new VBox(10);
+        activeOrderLayout.setPadding(new Insets(10));
+        
+        // 目前因為還沒做委託邏輯，先塞一個漂亮的 Placeholder 提示字卡
+        VBox emptyPlaceholder = new VBox(10);
+        emptyPlaceholder.setAlignment(Pos.CENTER);
+        emptyPlaceholder.setPadding(new Insets(50));
+        Label lblEmptyIcon = new Label("💤");
+        lblEmptyIcon.setStyle("-fx-font-size: 40px;");
+        Label lblEmptyText = new Label("目前沒有進行中的委託單");
+        lblEmptyText.setStyle("-fx-text-fill: #8b949e; -fx-font-size: 14px;");
+        emptyPlaceholder.getChildren().addAll(lblEmptyIcon, lblEmptyText);
+        
+        // 未來做委託功能時，可以把下面 activeOrderTable 顯示出來，暫時先放提示
+        activeOrderLayout.getChildren().add(emptyPlaceholder);
+        activeOrderTab.setContent(activeOrderLayout);
+
+        // ===== 分頁二：歷史成交 (已成交) =====
+        Tab historyOrderTab = new Tab("✅ 歷史成交");
+        VBox historyOrderLayout = new VBox(10);
+        historyOrderLayout.setPadding(new Insets(10));
+        
+        // 確保你原本就寫好的交易歷史表格能夠在這邊完美延伸拉滿
         VBox.setVgrow(historyTable, Priority.ALWAYS);
-        orderListView.getChildren().addAll(orderTitle, historyTable);
+        historyOrderLayout.getChildren().add(historyTable);
+        historyOrderTab.setContent(historyOrderLayout);
+
+        // 將兩個固定分頁塞入 TabPane
+        orderTabPane.getTabs().addAll(activeOrderTab, historyOrderTab);
+
+        // 將 TabPane 塞入主畫面 Container
+        orderListView.getChildren().add(orderTabPane);
     }
 
     /**
