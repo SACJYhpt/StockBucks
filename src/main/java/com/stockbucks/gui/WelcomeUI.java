@@ -5,6 +5,7 @@ import com.stockbucks.SaveData;
 import com.stockbucks.SaveManager;
 import com.stockbucks.User;
 import com.stockbucks.ai.mode.MarketMode;
+import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -53,10 +54,14 @@ public class WelcomeUI {
 
     // 顯示歡迎主選單
     public void show() {
+        javafx.application.Application.setUserAgentStylesheet(new atlantafx.base.theme.PrimerDark().getUserAgentStylesheet());
         Scene scene = new Scene(rootContainer, 600, 450);
         stage.setScene(scene);
         stage.setTitle("StockBucks 模擬交易系統");
         stage.show();
+        Platform.runLater(() -> {
+            rootContainer.requestFocus();
+        });
     }
 
     // 建立主選單畫面
@@ -144,7 +149,7 @@ public class WelcomeUI {
                     // 顯示存檔名稱
                     String displayName = fileName.replace(".dat", "").replace(".ser", "");
                     Label nameLabel = new Label(displayName);
-                    nameLabel.setStyle("-fx-text-fill: #2c2f31; -fx-font-weight: bold;");
+                    nameLabel.setStyle("-fx-text-fill: #bec0c1; -fx-font-weight: bold;");
 
                     Label modeBadge = new Label("未知的模式");
                     
@@ -238,14 +243,71 @@ public class WelcomeUI {
     }
 
     private void enterMainApp(SaveData loadedData) {
-        MainApp mainApp = new MainApp();
-        mainApp.setInitialSaveData(loadedData); 
-        try {
-            mainApp.start(stage);
-        } catch (Exception e) {
-            e.printStackTrace();
-            showErrorAlert("啟動失敗", "主模擬介面啟動時發生錯誤。");
-        }
+        VBox loadingRoot = new VBox(20);
+        loadingRoot.setAlignment(Pos.CENTER);
+        loadingRoot.setPadding(new Insets(50));
+        // 帶點神秘感的深色背景
+        loadingRoot.setStyle("-fx-background-color: #1c2128;"); 
+
+        // 1. 載入狀態提示字
+        Label lblStatus = new Label("🤖 正在初始化 AI 投資助理...");
+        lblStatus.getStyleClass().add(Styles.TITLE_3);
+        lblStatus.setStyle("-fx-text-fill: #9ba9b9;");
+
+        // 2. 絢麗的進度條 (使用 AtlantaFX 的圓角或進度條風格)
+        ProgressBar progressBar = new ProgressBar(0.0);
+        progressBar.setPrefWidth(350);
+        progressBar.getStyleClass().add(Styles.SMALL); // 纖細精緻的進度條
+
+        // 3. 隨機跳動的細部進度提示 (讓畫面看起來真的有在運算)
+        Label lblSubStatus = new Label("正在建立安全連線...");
+        lblSubStatus.getStyleClass().add(Styles.TEXT_MUTED);
+        lblSubStatus.setStyle("-fx-font-size: 12px;");
+
+        loadingRoot.getChildren().addAll(lblStatus, progressBar, lblSubStatus);
+
+        // 4. 切換核心：把原本的主選單或存檔畫面拔掉，塞入載入畫面
+        rootContainer.getChildren().remove(1); // 移除當前上層畫面
+        rootContainer.getChildren().add(loadingRoot);
+
+        // 5. 使用 Timeline 模擬動態載入進度與文字切換
+        javafx.animation.Timeline loadingTimeline = new javafx.animation.Timeline();
+        
+        // 模擬 0.5 秒時的變化
+        javafx.animation.KeyFrame kf1 = new javafx.animation.KeyFrame(javafx.util.Duration.millis(500), e -> {
+            progressBar.setProgress(0.3);
+            lblStatus.setText("📊 正在解析歷史市場數據...");
+            lblSubStatus.setText("正在載入 CSV 股價矩陣與權重...");
+        });
+
+        // 模擬 1.2 秒時的變化
+        javafx.animation.KeyFrame kf2 = new javafx.animation.KeyFrame(javafx.util.Duration.millis(1200), e -> {
+            progressBar.setProgress(0.7);
+            lblStatus.setText("⚡ 正在配置時脈引擎...");
+            lblSubStatus.setText("動態變速拉桿對接中 (1x - 10x)...");
+        });
+
+        // 模擬 1.8 秒時的變化
+        javafx.animation.KeyFrame kf3 = new javafx.animation.KeyFrame(javafx.util.Duration.millis(1800), e -> {
+            progressBar.setProgress(0.95);
+            lblStatus.setText("🚀 準備就緒！");
+            lblSubStatus.setText("正在渲染終端交易介面...");
+        });
+
+        // 2.3 秒時，切換進入 MainApp
+        javafx.animation.KeyFrame kfEnd = new javafx.animation.KeyFrame(javafx.util.Duration.millis(2300), e -> {
+            MainApp mainApp = new MainApp();
+            mainApp.setInitialSaveData(loadedData); 
+            try {
+                mainApp.start(stage); //真正啟動主程式
+            } catch (Exception ex) {
+                ex.printStackTrace();
+                showErrorAlert("啟動失敗", "主模擬介面啟動時發生錯誤。");
+            }
+        });
+
+        loadingTimeline.getKeyFrames().addAll(kf1, kf2, kf3, kfEnd);
+        loadingTimeline.play();
     }
 
     private void showErrorAlert(String title, String content) {
