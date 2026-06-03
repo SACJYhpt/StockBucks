@@ -47,6 +47,11 @@ public class MainApp extends Application {
     private XYChart.Series<Number, Number> priceSeries = new XYChart.Series<>();
     private XYChart.Series<Number, Number> limitUpSeries;
     private XYChart.Series<Number, Number> limitDownSeries;
+
+    private HBox backtestControlBar;  // 包含時空選擇與速控的容器
+    private DatePicker dateSelector;  // 月曆時空選擇器
+    private Slider speedSlider;       // 速度控制條
+    private Label speedLabel;       // 用於顯示當前模擬速度的標籤
     
     // 模擬核心數據
     private int tickCount = 0;
@@ -54,6 +59,7 @@ public class MainApp extends Application {
     private int dayIndex = 0;
     private com.stockbucks.ai.mode.MarketMode marketMode = com.stockbucks.ai.mode.MarketMode.HISTORY;
     private Timeline timeline;
+    private static final double BASE_INTERVAL_MS = 1000.0;
 
     //  側邊欄核心元件
     private BorderPane mainLayout;
@@ -230,7 +236,7 @@ public class MainApp extends Application {
         topSearchBar.setAlignment(Pos.CENTER_LEFT);
         topSearchBar.setPadding(new Insets(0, 0, 15, 0));
 
-        // 搜尋輸入框 (仿 image_b34f08.jpg 上方搜尋欄)
+        // 搜尋輸入框
         TextField stockSearchField = new TextField();
         stockSearchField.setPromptText("🔍 搜尋股票、名稱或代碼...");
         stockSearchField.setPrefWidth(400);
@@ -271,7 +277,41 @@ public class MainApp extends Application {
 
         tradeControlPanel.getChildren().addAll(new Label("交易股數:"), sharesField, buyBtn, sellBtn, new Separator(javafx.geometry.Orientation.VERTICAL), infoLabel);
         
-        centerArea.getChildren().addAll(lineChart, tradeControlPanel);
+        backtestControlBar = new HBox(15);
+        backtestControlBar.setAlignment(Pos.CENTER_LEFT);
+        backtestControlBar.setPadding(new Insets(10));
+        backtestControlBar.setStyle("-fx-background-color: #22272e; -fx-background-radius: 6px; -fx-border-color: #30363d; -fx-border-width: 1;");
+
+        //時空選擇器
+        Label lblDate = new Label("📅 時空選擇:");
+        dateSelector = new DatePicker();
+        dateSelector.setPrefWidth(150);
+
+        //速度控制條
+        Label lblSpeed = new Label("⚡ 模擬速度:");
+        speedSlider = new Slider(1, 10, 1); // 1x ~ 10x
+        speedSlider.setShowTickMarks(true);
+        speedSlider.setMajorTickUnit(3);
+        speedLabel = new Label("1x (一般)");
+        
+        speedSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
+            int speed = newVal.intValue();
+            speedLabel.setText(speed + "x");
+            updateTimelineSpeed(speed);
+        });
+
+        backtestControlBar.getChildren().addAll(lblDate, dateSelector, new Separator(javafx.geometry.Orientation.VERTICAL), lblSpeed, speedSlider, speedLabel);
+
+        //動態顯示核心：根據從 WelcomeUI 傳進來的 marketMode 決定生死
+        if (this.marketMode == com.stockbucks.ai.mode.MarketMode.HISTORY) {
+            backtestControlBar.setVisible(true);
+            backtestControlBar.setManaged(true);
+        } else {
+            backtestControlBar.setVisible(false);
+            backtestControlBar.setManaged(false);
+        }
+
+        centerArea.getChildren().addAll(backtestControlBar,lineChart, tradeControlPanel);
 
         // --- (C) 右側 AI 問答區塊 (仿 image_b34f08.jpg 右側「研究」欄位) ---
         VBox aiSection = new VBox(15);
@@ -356,6 +396,11 @@ public class MainApp extends Application {
 
         // 將 TabPane 塞入主畫面 Container
         orderListView.getChildren().add(orderTabPane);
+    }
+
+    private void updateTimelineSpeed(int speedMultiplier) {
+        if (timeline == null) return;
+        timeline.setRate(speedMultiplier);
     }
 
     /**
@@ -618,6 +663,9 @@ public class MainApp extends Application {
             }
         }));
         timeline.setCycleCount(Animation.INDEFINITE);
+        if (speedSlider != null) {
+            timeline.setRate(speedSlider.getValue());
+        }
         timeline.play();
     }
 
