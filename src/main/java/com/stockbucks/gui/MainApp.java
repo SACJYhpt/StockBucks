@@ -66,6 +66,7 @@ public class MainApp extends Application {
     private StackPane contentArea;
     private VBox sidebar;
     private boolean isSidebarExpanded = true;
+    private Stage stage;
 
     // 獨立出來的四個子畫面 Container
     private StackPane marketView;
@@ -83,7 +84,8 @@ public class MainApp extends Application {
         MARKET("📈  市場行情", "📈"),
         TRADE("💰  下單交易", "💰"),
         ASSET("📇  帳務總覽", "📇"),
-        ORDERS("📜  委託清單", "📜");
+        ORDERS("📜  委託清單", "📜"),
+        EXIT("🚪 返回主選單", "🚪");
 
         final String fullText;
         final String icon;
@@ -99,6 +101,7 @@ public class MainApp extends Application {
 
     @Override
     public void start(Stage stage) {
+        this.stage = stage;
         Application.setUserAgentStylesheet(new PrimerDark().getUserAgentStylesheet());
         
         // 1. 初始化資料
@@ -474,7 +477,24 @@ public class MainApp extends Application {
 
         box.getChildren().add(toggleBtn);
         box.getChildren().add(new Separator());
-        box.getChildren().addAll(menuButtons);
+        
+        for (int i = 0; i < menuButtons.size(); i++) {
+            Button btn = menuButtons.get(i);
+            MenuType type = MenuType.values()[i];
+            
+            if (type == MenuType.EXIT) {
+                // 建立一個彈簧元件，把退出按鈕頂到側欄最底端
+                javafx.scene.layout.Region spacer = new javafx.scene.layout.Region();
+                VBox.setVgrow(spacer, javafx.scene.layout.Priority.ALWAYS);
+                box.getChildren().add(spacer);
+                
+                // 加一條分割線
+                box.getChildren().add(new Separator()); 
+            }
+            
+            box.getChildren().add(btn);
+        }
+
         return box;
     }
 
@@ -482,6 +502,24 @@ public class MainApp extends Application {
      * 動態切換中央工作區畫面的核心方法
      */
     private void switchView(MenuType menu) {
+        if (menu == MenuType.EXIT) {
+            // 1. 安全機制：退回前先強制把正在跑的 K 線計時器（Timeline）停掉
+            if (this.timeline != null) {
+                this.timeline.stop();
+            }
+
+            if (mainLayout != null) {
+                mainLayout.requestFocus();
+            }
+
+            Platform.runLater(() -> {
+                com.stockbucks.gui.WelcomeUI welcomeUI = new com.stockbucks.gui.WelcomeUI(this.stage);
+                welcomeUI.show();
+            });
+            
+            return; // 🔍 極其重要：直接結束方法，阻止後續的 contentArea 清空與切換
+        }
+
         contentArea.getChildren().clear();
         updateInfoLabel(); // 每當切換畫面，同步更新最新的資產狀態數值
         
