@@ -1,13 +1,13 @@
 package com.stockbucks;
 
-import java.io.Serializable;
+import java.util.Queue;
 import java.util.Iterator;
 import java.util.LinkedList;
-import java.util.Queue;
+import java.io.Serializable;
 
 public class SettlementManager implements Serializable {
     private static final long serialVersionUID = 1L;
-    private Queue<Settlement> q = new LinkedList<>();
+    private Queue <Settlement> q = new LinkedList<>();
 
     public static class Settlement implements Serializable {
         private static final long serialVersionUID = 1L;
@@ -25,11 +25,12 @@ public class SettlementManager implements Serializable {
     }
 
     public void SettlementClearing(String today, User user) {
-        Iterator<Settlement> iterator = q.iterator();
+        Iterator <Settlement> iterator = q.iterator();
         while (iterator.hasNext()) {
             Settlement set = iterator.next();
             if (set.date.compareTo(today) <= 0) {
-                System.out.println(set.date + " settlement recorded: " + set.price);
+                user.addCash(set.price);
+                System.out.println(set.date+"交割金額："+set.price);
                 iterator.remove();
             }
         }

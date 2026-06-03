@@ -1,21 +1,20 @@
 package com.stockbucks;
 
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.io.Serializable;
 
 public class User implements Serializable {
     private static final long serialVersionUID = 1L;
     private static final double DEFAULT_INITIAL_CASH = 1_200_000;
 
-    private double initialCash = DEFAULT_INITIAL_CASH;
     private double cash = DEFAULT_INITIAL_CASH;
-    private HashMap<String, StockHoldings> holdings = new HashMap<>();
+    private LinkedHashMap <String, StockHoldings> holdings = new LinkedHashMap<>();
     private SettlementManager settlement = new SettlementManager();
-    private List<TradeRecord> tradeHistory = new ArrayList<>();
+    private List <TradeRecord> tradeHistory = new ArrayList<>();
 
-    public List<TradeRecord> getTradeHistory() {
+    public List <TradeRecord> getTradeHistory() {
         return tradeHistory;
     }
 
@@ -23,11 +22,12 @@ public class User implements Serializable {
         this.tradeHistory.add(record);
     }
 
-    public void stockBuying(String stockID, int amount, double averageCostPerShare) {
+    public void stockBuying(String stockID, int amount, double cost) {
         if (!holdings.containsKey(stockID)) {
-            holdings.put(stockID, new StockHoldings(stockID, amount, averageCostPerShare));
-        } else {
-            holdings.get(stockID).updateAdd(amount, averageCostPerShare);
+            holdings.put(stockID, new StockHoldings(stockID, amount, cost));
+        }
+        else {
+            holdings.get(stockID).updateAdd(amount, cost);
         }
     }
 
@@ -52,54 +52,43 @@ public class User implements Serializable {
     public double getOnePresentValue(String stockID, double currentPrice) {
         StockHoldings data = holdings.get(stockID);
         if (data == null) return 0;
-        return data.getQuantity() * currentPrice;
+        return data.getQuantity()*currentPrice;
     }
 
     public double getOneNetWorth(String stockID, double currentPrice) {
         StockHoldings data = holdings.get(stockID);
         if (data == null) return 0;
-        return data.getQuantity() * currentPrice - data.getTotalCost();
+        return data.getQuantity()*currentPrice - data.getTotalCost();
     }
 
     public double getOneAveragePrice(String stockID) {
         StockHoldings data = holdings.get(stockID);
         if (data == null || data.getQuantity() == 0) return 0;
-        return data.getTotalCost() / data.getQuantity();
+        return data.getTotalCost()/data.getQuantity();
     }
 
-    public double getInitialCash() {
-        normalizeFinancialState();
-        return initialCash;
-    }
-
-    public double getAvailableCash() {
-        normalizeFinancialState();
-        return cash;
+    public double getTotalPresentValue(String mainStockID, double currentPrice) {
+        double totalValue = 0;
+        for (String stockID: holdings.keySet()) {
+            if (stockID.equals(mainStockID)) {
+                totalValue += getOnePresentValue(mainStockID, currentPrice);
+            }
+            else {
+                totalValue += getOneTotalCost(stockID);
+            }
+        }
+        return totalValue;
     }
 
     public double getCash() {
-        return getAvailableCash();
-    }
-
-    public boolean withdrawCash(double amount) {
-        normalizeFinancialState();
-        if (amount < 0) {
-            return false;
-        }
-        if (cash < amount) {
-            return false;
-        }
-        cash -= amount;
-        return true;
-    }
-
-    public void depositCash(double amount) {
-        normalizeFinancialState();
-        this.cash += amount;
+        return cash;
     }
 
     public void addCash(double amount) {
-        depositCash(amount);
+        this.cash += amount;
+        if (this.cash < 0) {
+            System.out.println("違約交割，信用破產");
+        }
     }
 
     public int getStockQuantity(String stockID) {
@@ -112,9 +101,7 @@ public class User implements Serializable {
         return settlement;
     }
 
-    private void normalizeFinancialState() {
-        if (initialCash <= 0) {
-            initialCash = DEFAULT_INITIAL_CASH;
-        }
+    public LinkedHashMap <String, StockHoldings> getHolding() {
+        return holdings;
     }
 }

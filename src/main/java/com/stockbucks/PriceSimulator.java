@@ -160,7 +160,6 @@ public class PriceSimulator {
             
             boolean isUp = false;
             boolean isDown = false;
-            double directionRoll = random.nextDouble();
             if (random.nextDouble() > 0.25) {
                 isUp = random.nextDouble() < upProbability;
                 isDown = !isUp;

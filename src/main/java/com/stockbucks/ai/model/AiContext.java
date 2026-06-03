@@ -118,7 +118,7 @@ public class AiContext {
                 目前市值：%.2f
                 未實現損益：%.2f
                 """.formatted(
-                user.getAvailableCash(),
+                user.getCash(),
                 user.getStockQuantity(stockId),
                 user.getOneAveragePrice(stockId),
                 user.getOneTotalCost(stockId),

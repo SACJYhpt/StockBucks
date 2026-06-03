@@ -5,16 +5,19 @@ import java.util.HashMap;
 import java.util.List;
 
 public class TradingEngine {
-    private List<TradeRecord> dailyRecords = new ArrayList<>();
-    private HashMap<String, Integer> todayOddsShares = new HashMap<>();
+    // 處理交易 (保留引擎內部的 dailyRecords，方便單次模擬調閱)
+    private List <TradeRecord> dailyRecords = new ArrayList<>();
+    // 追蹤今日零股 零股無法當沖
+    private HashMap <String, Integer> todayOddsShares = new HashMap<>();
 
-    private List<String> globalCalender;
+    private List <String> globalCalender;
     private String currentDate = "";
 
-    public TradingEngine(List<String> globalCalender) {
+    public TradingEngine(List <String> globalCalender) {
         this.globalCalender = globalCalender;
     }
 
+    // isBuy: 0: sell, 1: buy
     public void trading(User user, String stockId, String date, int shares, double price, boolean isBuy) {
         date = date.contains(" ") ? date.split(" ")[0] : date;
         if (currentDate.isEmpty()) {
@@ -25,70 +28,79 @@ public class TradingEngine {
             currentDate = date;
             todayOddsShares.clear();
             user.getSettlementManager().SettlementClearing(date, user);
-        } else if (date.compareTo(currentDate) < 0) {
-            System.out.println("Engine date: " + currentDate + ", input date: " + date);
+        }
+        else if (date.compareTo(currentDate) < 0) {
+            System.out.println("引擎時間: " + currentDate + "，傳入時間: " + date);
         }
 
-        double grossAmount = shares * price;
+        double totalCost = shares * price;
 
         if (isBuy) {
-            buying(user, stockId, date, shares, price, grossAmount);
-        } else {
-            selling(user, stockId, date, shares, price, grossAmount);
+            buying(user, stockId, date, shares, price, totalCost);
+        }
+        else {
+            selling(user, stockId, date, shares, price, totalCost);
         }
     }
 
-    private void buying(User user, String stockID, String date, int shares, double price, double grossAmount) {
-        long commission = calculateCommission(grossAmount);
-        double totalCost = grossAmount + commission;
-
-        if (!user.withdrawCash(totalCost)) {
-            System.out.println("Insufficient available cash.");
-            return;
+    private void buying(User user, String stockID, String date, int shares, double price, double totalCost) {
+        long commission = (long) Math.floor(totalCost * 0.001425);
+        if (commission < 1){
+            commission = 1;
         }
+        totalCost += commission;
+        
+        if (user.getCash() < totalCost) {
+            System.out.println("本金不足 請留意違約交割風險");
 
         String dateTplus2 = getDateTplus2(date);
         user.getSettlementManager().addSettlement(dateTplus2, totalCost * -1);
-        user.stockBuying(stockID, shares, totalCost / shares);
+        user.stockBuying(stockID, shares, totalCost);
 
         if (shares < 1000) {
             todayOddsShares.put(stockID, todayOddsShares.getOrDefault(stockID, 0) + shares);
         }
 
-        TradeRecord log = new TradeRecord(stockID, date, "BUY", price, shares, commission, 0, totalCost);
+        String record = String.format("買入代號 %s: 成交價 %.2f 元共 %d 股，手續費 %d 元，總共%.2f元", stockID, price, shares, commission, totalCost);
+        TradeRecord log = new TradeRecord(stockID, date, "買入", price, shares, commission, 0, totalCost);
         dailyRecords.add(log);
         user.addTradeRecord(log);
-        System.out.println("Trade success: BUY " + stockID + " shares=" + shares + " price=" + price + " total=" + totalCost);
+        System.out.println("交易成功: " + record);
+        }
     }
 
-    private void selling(User user, String stockID, String date, int shares, double price, double grossAmount) {
+    private void selling(User user, String stockID, String date, int shares, double price, double totalCost) {
         int totalHoldings = user.getStockQuantity(stockID);
         int todayOdds = todayOddsShares.getOrDefault(stockID, 0);
 
         if (shares > totalHoldings) {
-            System.out.println("Insufficient holdings.");
+            System.out.println("持有庫存不足");
             return;
-        } else if (shares > totalHoldings - todayOdds) {
-            System.out.println("Odd-lot shares bought today cannot be day-traded.");
+        }
+        else if (shares > totalHoldings - todayOdds) {
+            System.out.println("交易失敗，零股無法當沖");
             return;
         }
 
-        long commission = calculateCommission(grossAmount);
-        long tax = (long) Math.floor(grossAmount * 0.003);
-        double netProceeds = grossAmount - commission - tax;
+        long commission = (long) Math.floor(totalCost * 0.001425);
+        if (commission < 1) {
+            commission = 1;
+        }
+        long tax = (long) Math.floor(totalCost*0.003);
+        totalCost -= commission+tax;
 
         String dateTplus2 = getDateTplus2(date);
-        user.getSettlementManager().addSettlement(dateTplus2, netProceeds);
+        user.getSettlementManager().addSettlement(dateTplus2, totalCost);
         user.stockSelling(stockID, shares);
-        user.depositCash(netProceeds);
 
-        TradeRecord log = new TradeRecord(stockID, date, "SELL", price, shares, commission, tax, netProceeds);
+        String record = String.format("賣出代號 %s: 成交價 %.2f 元共 %d 股，手續費 %d 元，證交稅 %d 元，總共%.2f元", stockID, price, shares, commission, tax, totalCost);
+        TradeRecord log = new TradeRecord(stockID, date, "賣出", price, shares, commission, tax, totalCost);
         dailyRecords.add(log);
         user.addTradeRecord(log);
-        System.out.println("Trade success: SELL " + stockID + " shares=" + shares + " price=" + price + " total=" + netProceeds);
+        System.out.println("交易成功: " + record);
     }
 
-    public List<TradeRecord> getDailyRecords() {
+    public List <TradeRecord> getDailyRecords() {
         return dailyRecords;
     }
 
@@ -96,17 +108,12 @@ public class TradingEngine {
         String pureDate = date.contains(" ") ? date.split(" ")[0] : date;
         int currentIndex = globalCalender.indexOf(pureDate);
         if (currentIndex == -1) {
-            System.err.println("Unknown trading date: " + pureDate);
+            System.err.println("找不到交易日: " + pureDate);
             return pureDate;
         }
         if (currentIndex + 2 >= globalCalender.size()) {
             return globalCalender.get(globalCalender.size() - 1);
         }
         return globalCalender.get(currentIndex + 2);
-    }
-
-    private long calculateCommission(double amount) {
-        long commission = (long) Math.floor(amount * 0.001425);
-        return Math.max(commission, 1);
     }
 }
