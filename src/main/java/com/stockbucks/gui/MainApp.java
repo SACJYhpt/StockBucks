@@ -390,7 +390,7 @@ public class MainApp extends Application {
                 break;
             case ASSET:
                 contentArea.getChildren().add(assetView);
-                // 可以在這裡呼叫方法重新渲染資產清單
+                refreshAssetView();
                 break;
             case ORDERS:
                 contentArea.getChildren().add(orderListView);
@@ -759,6 +759,120 @@ public class MainApp extends Application {
         alert.setHeaderText(null);
         alert.setContentText(msg);
         alert.showAndWait();
+    }
+
+    /**
+     * ✨ 動態對接 User 數據，渲染仿國泰/富邦風格的圓餅圖資產面板
+     */
+    private void refreshAssetView() {
+        assetView.getChildren().clear(); // 清空舊畫面
+
+        // 1. 標題
+        Label assetTitle = new Label("📊 我的帳務資產總覽");
+        assetTitle.getStyleClass().add(Styles.TITLE_2);
+        assetView.getChildren().addAll(assetTitle, new Separator());
+
+        // 2. 獲取核心金流數據
+        double cash = user.getCash();
+        
+        // 取得當前模擬的股票最新價格
+        double currentPrice = 0.0;
+        try {
+            currentPrice = Double.parseDouble(currentPriceLabel.getText().replace("當前市價: ", ""));
+        } catch (Exception e) {
+            currentPrice = (historyData != null && !historyData.isEmpty()) ? historyData.get(dayIndex).getClose() : 600.0;
+        }
+
+        // 呼叫 User 內的新方法，精準計算出所有庫存股票的總市值
+        double totalStockValue = user.getTotalPresentValue("TestDataTSMC", currentPrice);
+        
+        // 總資產 = 現金 + 股票總市值
+        double totalAsset = cash + totalStockValue;
+
+        // 3. 【資產總現值面板】 (仿手機 App 頂部字卡樣式)
+        VBox totalAssetPanel = new VBox(8);
+        totalAssetPanel.setPadding(new Insets(15));
+        totalAssetPanel.setStyle("-fx-background-color: #1c2128; -fx-background-radius: 8; -fx-border-color: #30363d; -fx-border-radius: 8;");
+        
+        Label lblPanelTitle = new Label("庫存總現值 (TWD)");
+        lblPanelTitle.setStyle("-fx-text-fill: #8b949e; -fx-font-size: 14px;");
+        
+        Label lblTotalAssetValue = new Label(String.format("$ %,.2f", totalAsset));
+        lblTotalAssetValue.setStyle("-fx-font-size: 28px; -fx-font-weight: bold; -fx-text-fill: #adbac7;");
+        
+        Label lblCashAndStock = new Label(String.format("可用現金: $ %,.2f  |  股票總市值: $ %,.2f", cash, totalStockValue));
+        lblCashAndStock.setStyle("-fx-text-fill: #58a6ff; -fx-font-size: 13px;");
+        
+        totalAssetPanel.getChildren().addAll(lblPanelTitle, lblTotalAssetValue, lblCashAndStock);
+        assetView.getChildren().add(totalAssetPanel);
+
+        // 4. 【左右並排區】區域：左邊放圓餅圖，右邊放比例明細
+        HBox chartSection = new HBox(40);
+        chartSection.setAlignment(Pos.CENTER_LEFT);
+        chartSection.setPadding(new Insets(15, 10, 10, 10));
+
+        // --- 建立 JavaFX PieChart ---
+        javafx.scene.chart.PieChart pieChart = new javafx.scene.chart.PieChart();
+        pieChart.setLabelsVisible(false); // 關閉圖表外圍文字，改看右邊清單
+        pieChart.setLegendVisible(false); // 關閉下方預設圖例
+        pieChart.setPrefSize(260, 260);
+
+        // --- 建立右側的詳細比例數據清單 ---
+        VBox legendList = new VBox(12);
+        legendList.setAlignment(Pos.CENTER_LEFT);
+
+        Label lblListTitle = new Label("📊 各資產配置比例");
+        lblListTitle.getStyleClass().addAll(Styles.TEXT_BOLD, Styles.TITLE_4);
+        legendList.getChildren().add(lblListTitle);
+
+        // A. 塞入「可用現金」到圖表與清單
+        if (cash > 0) {
+            pieChart.getData().add(new javafx.scene.chart.PieChart.Data("可用現金", cash));
+            double cashPercent = totalAsset > 0 ? (cash / totalAsset) * 100 : 0;
+            
+            Label lblCashData = new Label(String.format("🔵 可用現金: %.1f%% ($ %,.2f)", cashPercent, cash));
+            lblCashData.setStyle("-fx-font-size: 14px; -fx-text-fill: #58a6ff;");
+            legendList.getChildren().add(lblCashData);
+        }
+
+        // B. 迴圈遍歷 user.getHoldings()，動態將每檔擁有的股票塞入圖表與明細
+        java.util.HashMap<String, StockHoldings> holdings = user.getHolding();
+        
+        if (holdings != null && !holdings.isEmpty()) {
+            for (String stockID : holdings.keySet()) {
+                // 計算這檔股票的當前價值
+                double eachStockValue = 0;
+                if (stockID.equals("TestDataTSMC")) {
+                    eachStockValue = user.getOnePresentValue(stockID, currentPrice);
+                } else {
+                    eachStockValue = user.getOneTotalCost(stockID);
+                }
+
+                if (eachStockValue > 0) {
+                    // 塞入圓餅圖數據
+                    pieChart.getData().add(new javafx.scene.chart.PieChart.Data(stockID, eachStockValue));
+                    
+                    // 計算此個股佔總資產的百分比
+                    double stockPercent = totalAsset > 0 ? (eachStockValue / totalAsset) * 100 : 0;
+                    int shares = user.getStockQuantity(stockID);
+
+                    Label lblStockData = new Label(String.format("🟢 庫存股票 [%s]: %.1f%% (%d 股 | 市值 $ %,.2f)", 
+                            stockID, stockPercent, shares, eachStockValue));
+                    lblStockData.setStyle("-fx-font-size: 14px; -fx-text-fill: #57ab5a;");
+                    legendList.getChildren().add(lblStockData);
+                }
+            }
+        }
+
+        // C. 防呆：如果完全沒資產
+        if (totalAsset == 0) {
+            pieChart.getData().add(new javafx.scene.chart.PieChart.Data("空帳戶", 1));
+            legendList.getChildren().add(new Label("⚠️ 目前帳戶內沒有任何資產或庫存。"));
+        }
+
+        // 將圖表與數據面板並排組合
+        chartSection.getChildren().addAll(pieChart, legendList);
+        assetView.getChildren().add(chartSection);
     }
 
     public static void startApp(String[] args) {
