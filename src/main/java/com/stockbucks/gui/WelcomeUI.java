@@ -3,6 +3,8 @@ package com.stockbucks.gui;
 import atlantafx.base.theme.Styles;
 import com.stockbucks.SaveData;
 import com.stockbucks.SaveManager;
+import com.stockbucks.User;
+import com.stockbucks.ai.mode.MarketMode;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -14,6 +16,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
+import java.util.ArrayList;
 import java.util.List;
 
 public class WelcomeUI {
@@ -47,9 +50,7 @@ public class WelcomeUI {
         rootContainer.getChildren().addAll(backgroundView, mainMenuRoot);
     }
 
-  
-     //顯示歡迎主選單
-
+    // 顯示歡迎主選單
     public void show() {
         Scene scene = new Scene(rootContainer, 600, 450);
         stage.setScene(scene);
@@ -57,9 +58,7 @@ public class WelcomeUI {
         stage.show();
     }
 
-
-     //建立主選單畫面
-
+    // 建立主選單畫面
     private VBox createMainMenu() {
         VBox root = new VBox(25);
         root.setAlignment(Pos.CENTER);
@@ -73,10 +72,32 @@ public class WelcomeUI {
         Label subTitle = new Label("擬真股票交易與策略模擬工具");
         subTitle.getStyleClass().add(Styles.TEXT_MUTED);
 
+        // ===== 點擊「開啟新市場」時跳出三選一對話框 =====
         Button newMarketBtn = new Button("開啟新市場");
         newMarketBtn.getStyleClass().addAll(Styles.LARGE, Styles.ACCENT);
         newMarketBtn.setPrefWidth(250);
-        newMarketBtn.setOnAction(e -> enterMainApp(null)); 
+        newMarketBtn.setOnAction(e -> {
+            // 1. 建立對話框選項清單
+            List<MarketMode> choices = new ArrayList<>();
+            choices.add(MarketMode.REALTIME);
+            choices.add(MarketMode.HISTORY);
+            choices.add(MarketMode.AI_RANDOM);
+
+            // 2. 初始化 ChoiceDialog，預設選中歷史高速模擬
+            ChoiceDialog<MarketMode> dialog = new ChoiceDialog<>(MarketMode.HISTORY, choices);
+            dialog.setTitle("選擇市場運行模式");
+            dialog.setHeaderText("請選擇您要在 StockBucks 體驗的環境：");
+            dialog.setContentText("運行模式：");
+            
+            // 讓對話框的外觀完美融入你的暗色系風格
+            dialog.getDialogPane().setStyle("-fx-background-color: #1c2128;");
+
+            // 3. 監聽點擊結果，當使用者按下確認時才建立新戰局
+            dialog.showAndWait().ifPresent(chosenMode -> {
+                SaveData newData = new SaveData(new User(), 0, "全新模擬", chosenMode);
+                enterMainApp(newData);
+            });
+        }); 
 
         Button loadArchiveBtn = new Button("開啟舊模擬檔案");
         loadArchiveBtn.getStyleClass().addAll(Styles.LARGE, Styles.SUCCESS, Styles.BUTTON_OUTLINED);
@@ -87,8 +108,7 @@ public class WelcomeUI {
         return root;
     }
 
-
-     //切換到內建的存檔選取清單畫面
+    // 切換到內建的存檔選取清單畫面
     private void switchToArchiveList() {
         VBox archiveRoot = new VBox(15);
         archiveRoot.setAlignment(Pos.CENTER);
@@ -114,7 +134,6 @@ public class WelcomeUI {
         Button backBtn = new Button("返回主選單");
         backBtn.getStyleClass().add(Styles.FLAT);
         backBtn.setOnAction(e -> {
-            // 安全切換回主選單
             if (rootContainer.getChildren().size() > 1) {
                 rootContainer.getChildren().set(1, mainMenuRoot);
             }
