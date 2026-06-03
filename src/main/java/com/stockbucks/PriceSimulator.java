@@ -29,7 +29,7 @@ public class PriceSimulator {
         return 5.0;
     }
 
-    private double calculateLimitPrice(double yesterdayClose, boolean isUp) {
+    public double calculateLimitPrice(double yesterdayClose, boolean isUp) {
         double percentage = isUp ? 1.1 : 0.9;
         double limitPrice = yesterdayClose*percentage;
         double tick = getTickChangeSize(limitPrice);
@@ -55,8 +55,8 @@ public class PriceSimulator {
         double limitDown = calculateLimitPrice(yesterdayClose, false);
 
         int totalTime = 270; // 09:00 - 13:30， 早盤 10:30 午盤 12:30 晚盤
-        int firstTime = random.nextInt(90) + 20;
-        int secondTime = random.nextInt(80) + 150;
+        int firstTime = random.nextInt(90) + 30;
+        int secondTime = random.nextInt(80) + 160;
         int highTime = 0;
         int lowTime = 0;
         boolean wash = random.nextDouble() < 0.30;
@@ -99,8 +99,8 @@ public class PriceSimulator {
         double firstTargetPrice = (highTime < lowTime) ? high : low;
         int secondTargetTime = Math.max(highTime, lowTime);
         double secondTargetPrice = (highTime > lowTime) ? high : low;
+        
         double momentum = 0.0; // 動能因子
-
         double currentPrice = open;
         dayPath.add(currentPrice);
 
@@ -109,6 +109,7 @@ public class PriceSimulator {
                 dayPath.add(close);
                 continue;
             }
+
             double targetPrice;
             int targetTime;
             if (i <= firstTargetTime) {
@@ -124,26 +125,30 @@ public class PriceSimulator {
                 targetTime = totalTime - 5;
             }
 
-            double volatility = 1.0;
-            if (i <= 60 || i >= 240) {
-                volatility = 3.6; // 09:00 - 10:00、13:00 - 13:30 波動較大
+            double baseVolatility = 1.0;
+            if (i <= 40 || i >= 240) {
+                baseVolatility = 1.8; // 09:00 - 09:40、13:00 - 13:30 波動較大
             }
 
-            double baseProbability = 0.5;
+            double intervalProbability = (targetPrice > currentPrice) ? 0.54 : 0.46;
+
             int tickLeft = targetTime - i;
+            double pullForce = 0.0;
             if (tickLeft > 0) {
                 double priceGap = targetPrice - currentPrice;
                 double needTick = priceGap/getTickChangeSize(currentPrice);
-                double pullForce = (needTick/tickLeft)*0.15;
-                baseProbability += pullForce;
+                pullForce = (needTick/tickLeft) * 0.1;
+                // baseProbability += pullForce;
             }
-            if (targetPrice > currentPrice) {
-                baseProbability += 0.02;
+
+            if (targetPrice == high && currentPrice >= high-(2*getTickChangeSize(currentPrice))) {
+                intervalProbability = 0.58;
             }
-            else {
-                baseProbability -= 0.02;
+            else if (targetPrice == low && currentPrice <= low+(2*getTickChangeSize(currentPrice))) {
+                intervalProbability = 0.42;
             }
-            double upProbability = baseProbability+momentum;
+
+            double upProbability = intervalProbability + momentum + pullForce;
             upProbability = Math.max(0.01, Math.min(0.99, upProbability));
             
             if (currentPrice >= limitUp || currentPrice >= high) {
@@ -155,14 +160,19 @@ public class PriceSimulator {
             
             boolean isUp = false;
             boolean isDown = false;
-            if (random.nextDouble() > 0.15) {
+            double directionRoll = random.nextDouble();
+            if (random.nextDouble() > 0.25) {
                 isUp = random.nextDouble() < upProbability;
                 isDown = !isUp;
             }
 
+            double distanceToTarget = Math.abs(targetPrice - currentPrice);
+            double currentTickSize = getTickChangeSize(currentPrice);
+            double maxExpectedVolatility = baseVolatility + Math.min(1.5, distanceToTarget/(10 * currentTickSize));
+
             int moveTick = 1;
-            if (volatility > 1.0) {
-                moveTick = (int)(random.nextDouble()*volatility)+1;
+            if (maxExpectedVolatility > 1.0 && random.nextDouble() < 0.4) {
+                moveTick = (int)(random.nextDouble() * maxExpectedVolatility) + 1;
             }
 
             for (int t=0; t<moveTick; t++) {
@@ -184,13 +194,13 @@ public class PriceSimulator {
             }
 
             if (isUp) {
-                momentum = Math.min(momentum + 0.05, 0.15);
+                momentum = Math.min(momentum + 0.03, 0.15);
             }
             else if (isDown) {
-                momentum = Math.max(momentum - 0.05, 0.15*-1);
+                momentum = Math.max(momentum - 0.03, -0.15);
             }
             else {
-                momentum *= 0.66;
+                momentum *= 0.5;
             }
 
             // if (i == firstTargetTime) currentPrice = firstTargetPrice;

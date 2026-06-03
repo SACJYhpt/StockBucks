@@ -44,6 +44,8 @@ public class MainApp extends Application {
     private TextField sharesField = new TextField("1000");
     private LineChart<Number, Number> lineChart;
     private XYChart.Series<Number, Number> priceSeries = new XYChart.Series<>();
+    private XYChart.Series<Number, Number> limitUpSeries;
+    private XYChart.Series<Number, Number> limitDownSeries;
     
     // 模擬核心數據
     private int tickCount = 0;
@@ -248,7 +250,7 @@ public class MainApp extends Application {
 
         // --- (B) 中間圖表與交易控制區 ---
         VBox centerArea = new VBox(10);
-        lineChart = createPriceChart();
+        lineChart = createPriceChart(100.0, 110.0 ,90.0);
         VBox.setVgrow(lineChart, Priority.ALWAYS);
 
         // 交易控制面板 (放在圖表下方)
@@ -436,22 +438,37 @@ public class MainApp extends Application {
         }
     }
 
-    private LineChart<Number, Number> createPriceChart() {
-        NumberAxis xAxis = new NumberAxis();
-        NumberAxis yAxis = new NumberAxis();
+    private LineChart<Number, Number> createPriceChart(double yesterdayClose, double limitUp, double limitDown) {
+        NumberAxis xAxis = new NumberAxis(0, 270, 30);
+        NumberAxis yAxis = new NumberAxis(limitDown-yesterdayClose*0.01, limitUp*0.01, (limitUp - limitDown)/10);
         xAxis.setLabel("時間 (Ticks)");
         xAxis.setForceZeroInRange(false);
+        xAxis.setAutoRanging(false);
         yAxis.setSide(Side.RIGHT); 
         yAxis.setForceZeroInRange(false);
+        yAxis.setAutoRanging(false);
         
         LineChart<Number, Number> chart = new LineChart<>(xAxis, yAxis);
         chart.setTitle("即時價格走勢");
         chart.setCreateSymbols(false); 
         chart.setAnimated(false);
+
+        limitUpSeries = new XYChart.Series<>();
+        limitUpSeries.setName("漲停價");
+
+        limitDownSeries = new XYChart.Series<>();
+        limitDownSeries.setName("跌停價");
         
         priceSeries = new XYChart.Series<>();
         priceSeries.setName("股價");
+
+        chart.getData().add(limitUpSeries);
+        chart.getData().add(limitDownSeries);
         chart.getData().add(priceSeries);
+
+        limitUpSeries.getNode().setStyle("-fx-stroke: #FF3B30; -fx-stroke-dash-array: 5 5; -fx-stroke-width: 1.5px;");
+        limitDownSeries.getNode().setStyle("-fx-stroke: #34C759; -fx-stroke-dash-array: 5 5; -fx-stroke-width: 1.5px;");
+
         return chart;
     }
 
@@ -507,6 +524,33 @@ public class MainApp extends Application {
 
         StockData today = historyData.get(dayIndex);
         double yesterdayClose = (dayIndex == 0) ? today.getOpen() : historyData.get(dayIndex - 1).getClose();
+        
+        double limitUp = simulator.calculateLimitPrice(yesterdayClose, true);
+        double limitDown = simulator.calculateLimitPrice(yesterdayClose, false);
+
+        if (lineChart != null) {
+            NumberAxis yAxis = (NumberAxis) lineChart.getYAxis();
+            yAxis.setLowerBound(limitDown - yesterdayClose*0.01);
+            yAxis.setUpperBound(limitUp + yesterdayClose*0.01);
+            yAxis.setTickUnit((limitUp - limitDown)/10);
+        }
+        if (limitUpSeries != null) {
+            limitUpSeries.getData().clear();
+            limitUpSeries.getData().add(new XYChart.Data<>(0, limitUp));
+            limitUpSeries.getData().add(new XYChart.Data<>(270, limitUp));
+            if (limitUpSeries.getNode() != null) { // 紅色虛線
+                limitUpSeries.getNode().setStyle("-fx-stroke: #FF3B30; -fx-stroke-dash-array: 5 5; -fx-stroke-width: 1.5px;");
+            }
+        }
+        if (limitDownSeries != null) {
+            limitDownSeries.getData().clear();
+            limitDownSeries.getData().add(new XYChart.Data<>(0, limitDown));
+            limitDownSeries.getData().add(new XYChart.Data<>(270, limitDown));
+            if (limitDownSeries.getNode() != null) { // 綠色虛線
+                limitDownSeries.getNode().setStyle("-fx-stroke: #34C759; -fx-stroke-dash-array: 5 5; -fx-stroke-width: 1.5px;");
+            }
+        }
+        
         simulator.generateDayPath(today, yesterdayClose);
         
         priceSeries.getData().clear();
@@ -514,11 +558,20 @@ public class MainApp extends Application {
 
         if (timeline != null) timeline.stop();
 
-        timeline = new Timeline(new KeyFrame(Duration.millis(800), e -> {
+        timeline = new Timeline(new KeyFrame(Duration.millis(300), e -> {
             double currentPrice = simulator.getNextPrice();
             if (currentPrice != -1) {
                 currentPriceLabel.setText("當前市價: " + String.format("%.2f", currentPrice));
                 priceSeries.getData().add(new XYChart.Data<>(tickCount++, currentPrice));
+                if (priceSeries.getNode() != null) {
+                    if (currentPrice > yesterdayClose * 1.005) {
+                        priceSeries.getNode().setStyle("-fx-stroke: #FF3B30; -fx-stroke-width: 2px;");
+                    } else if (currentPrice < yesterdayClose * 0.995) {
+                        priceSeries.getNode().setStyle("-fx-stroke: #34C759; -fx-stroke-width: 2px;");
+                    } else {
+                        priceSeries.getNode().setStyle("-fx-stroke: #8E8E93; -fx-stroke-width: 2px;");
+                    }
+                }
             } else {
                 timeline.stop();
                 dayIndex++;
