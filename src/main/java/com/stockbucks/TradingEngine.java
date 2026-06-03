@@ -14,6 +14,8 @@ public class TradingEngine {
     private List <Order> pendingOrders = new ArrayList<>();
     private List <Order> allOrders = new ArrayList<>();
 
+    private List <String> notificationQueue = new ArrayList<>();
+
     private List <String> globalCalender;
     private String currentDate = "";
 
@@ -53,20 +55,24 @@ public class TradingEngine {
         
         if (isBuy) {
             if (user.getCash() < (totalCost + commission)) {
-                System.out.printf("【提醒】：目前可用現金 %.2f 元，預估需 %.2f 元。本金不足，請留意 T+2 違約交割風險！\n", user.getCash(), (totalCost + commission));
+                String msg = String.format("【提醒】：目前可用現金 %.2f 元，預估需 %.2f 元。本金不足，請留意 T+2 違約交割風險！\n", user.getCash(), (totalCost + commission));
+                notificationQueue.add(msg);
+                System.out.println(msg);
             }
         }
         else {
             int totalHoldings = user.getStockQuantity(stockID);
             int todayOdds = todayOddsShares.getOrDefault(stockID, 0);
             if (shares > totalHoldings) {
-                System.out.printf("【委託】委託失敗，持有庫存不足");
+                notificationQueue.add("【委託】委託失敗，持有庫存不足");
+                System.out.println("【委託】委託失敗，持有庫存不足");
                 order.setStatus(Order.OrderStatus.FAILED);
                 pendingOrders.add(order);
                 return;
             }
             else if (shares > totalHoldings - todayOdds) {
-                System.out.printf("【委託】委託失敗，零股無法當沖");
+                notificationQueue.add("【委託】委託失敗，零股無法當沖");
+                System.out.println("【委託】委託失敗，零股無法當沖");
                 order.setStatus(Order.OrderStatus.FAILED);
                 pendingOrders.add(order);
                 return;
@@ -76,6 +82,7 @@ public class TradingEngine {
         pendingOrders.add(order);
         allOrders.add(order);
         String log = String.format("【委託】%s 代號 %s: 限價 %.2f 元，共 %d 股，不含手續費總共%.2f元", isBuy ? "買入" : "賣出", stockID, price, shares, totalCost);
+        notificationQueue.add(log);
         System.out.println(log);
 
         // if (isBuy) {
@@ -147,6 +154,7 @@ public class TradingEngine {
             TradeRecord log = new TradeRecord(stockID, date, currentMinute, "買入", matchPrice, shares, commission, 0, totalCost);
             dailyRecords.add(log);
             user.addTradeRecord(log);
+            notificationQueue.add("【交易】交易成功 " + record);
             System.out.println("【交易】交易成功 " + record);
         }
         else {
@@ -161,6 +169,7 @@ public class TradingEngine {
             TradeRecord log = new TradeRecord(stockID, date, currentMinute, "賣出", matchPrice, shares, commission, tax, totalCost);
             dailyRecords.add(log);
             user.addTradeRecord(log);
+            notificationQueue.add("【交易】交易成功 " + record);
             System.out.println("【交易】交易成功 " + record);
         }
     }
@@ -175,6 +184,13 @@ public class TradingEngine {
 
     public List <Order> getAllOrders() {
         return this.allOrders;
+    }
+
+    public String getReturnMsg() {
+        if (notificationQueue == null || notificationQueue.isEmpty()) {
+            return null;
+        }
+        return notificationQueue.remove(0);
     }
 
     public String getDateTplus2(String date) {

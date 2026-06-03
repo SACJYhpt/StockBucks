@@ -17,7 +17,10 @@ import javafx.scene.chart.XYChart;
 import javafx.scene.control.*;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
 import javafx.stage.Stage;
+import javafx.stage.StageStyle;
+import javafx.animation.FadeTransition;
 import javafx.animation.Animation;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
@@ -647,6 +650,45 @@ public class MainApp extends Application {
         }
     }
 
+    // 一個漂亮的浮動通知
+    private void showNotification(String message, String type) {
+        Stage toastStage = new Stage();
+        toastStage.initStyle(StageStyle.TRANSPARENT);
+
+        Label toastLabel = new Label(message);
+
+        if (type.equals("BUY")) {
+            toastLabel.setStyle("-fx-background-color: #FF3B30; -fx-text-fill: white; -fx-padding: 10 20; -fx-background-radius: 20; -fx-font-size: 14px; -fx-font-weight: bold;");
+        }
+        else if (type.equals("SELL")) {
+            toastLabel.setStyle("-fx-background-color: #34C759; -fx-text-fill: white; -fx-padding: 10 20; -fx-background-radius: 20; -fx-font-size: 14px; -fx-font-weight: bold;");
+        }
+        else {
+            toastLabel.setStyle("-fx-background-color: #8E8E93; -fx-text-fill: white; -fx-padding: 10 20; -fx-background-radius: 20; -fx-font-size: 14px;");
+        }
+
+        VBox root = new VBox(toastLabel);
+        root.setStyle("-fx-background-color: transparent;"); // 容器本身必須完全透明
+        root.setAlignment(Pos.CENTER);
+
+        Scene scene = new Scene(root);
+        scene.setFill(Color.TRANSPARENT); // 畫布也必須透明
+        toastStage.setScene(scene);
+
+        // 🎯 讓通知視窗出現在螢幕正中央（偏上方的位置）
+        toastStage.setX(javafx.stage.Screen.getPrimary().getVisualBounds().getWidth() / 2 - 150);
+        toastStage.setY(120); // 距離螢幕頂端 120 像素
+
+        toastStage.show();
+
+        FadeTransition fade = new FadeTransition(Duration.millis(500), root);
+        fade.setFromValue(1.0);
+        fade.setToValue(0.0);
+        fade.setDelay(Duration.seconds(2.0));
+        fade.setOnFinished(event -> toastStage.close());
+        fade.play();
+    }
+
     private void updateInfoLabel() {
         infoLabel.setText(String.format("可用現金: $%,.0f | 庫存: %d 股", 
             user.getCash(), user.getStockQuantity("TestDataTSMC")));
@@ -660,6 +702,26 @@ public class MainApp extends Application {
         timeCol.setCellValueFactory(new PropertyValueFactory<>("time"));
         TableColumn<TradeRecord, String> typeCol = new TableColumn<>("類型");
         typeCol.setCellValueFactory(new PropertyValueFactory<>("type"));
+        typeCol.setCellFactory(column -> new TableCell<TradeRecord, String>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setStyle("");
+                }
+                else {
+                    setText(item);
+                    if (item.contains("買入")) {
+                        setStyle("-fx-text-fill: #FF3B30; -fx-font-weight: bold;"); // 買入亮紅
+                    } else if (item.contains("賣出")) {
+                        setStyle("-fx-text-fill: #34C759; -fx-font-weight: bold;"); // 賣出亮綠
+                    } else {
+                        setStyle("");
+                    }
+                }
+            }
+        });
         TableColumn<TradeRecord, Double> priceCol = new TableColumn<>("成交價");
         priceCol.setCellValueFactory(new PropertyValueFactory<>("price"));
         TableColumn<TradeRecord, Integer> sharesCol = new TableColumn<>("股數");
@@ -687,9 +749,17 @@ public class MainApp extends Application {
                 super.updateItem(isBuy, empty);
                 if (empty || isBuy == null) {
                     setText(null);
+                    setStyle("");
                 }
                 else {
-                    setText(isBuy ? "買入" : "賣出");
+                    if (isBuy) {
+                        setText("買入");
+                        setStyle("-fx-text-fill: #FF3B30; -fx-font-weight: bold;");
+                    }
+                    else {
+                        setText("賣出");
+                        setStyle("-fx-text-fill: #34C759; -fx-font-weight: bold;");
+                    }
                 }
             }
         });
@@ -699,6 +769,31 @@ public class MainApp extends Application {
         sharesCol.setCellValueFactory(new PropertyValueFactory<>("shares"));
         TableColumn<Order, Order.OrderStatus> statusCol = new TableColumn<>("狀態");
         statusCol.setCellValueFactory(new PropertyValueFactory<>("status"));
+        statusCol.setCellFactory(column -> new TableCell<Order, Order.OrderStatus>() {
+            @Override
+            protected void updateItem(Order.OrderStatus status, boolean empty) {
+                super.updateItem(status, empty);
+                if (empty || status == null) {
+                    setText(null);
+                    setStyle("");
+                }
+                else {
+                    setText(status.toString());
+                    if (status == Order.OrderStatus.FILLED) {
+                        setStyle("-fx-text-fill: #007AFF; -fx-font-weight: bold;");
+                    }
+                    else if (status == Order.OrderStatus.PENDING) {
+                        setStyle("-fx-text-fill: #FF9500; -fx-font-weight: bold;");
+                    }
+                    else if (status == Order.OrderStatus.FAILED) {
+                        setStyle("-fx-text-fill: #ff0d00; -fx-font-weight: bold;");
+                    }
+                    else {
+                        setStyle("-fx-text-fill: #8E8E93;");
+                    }
+                }
+            }
+        });
 
         activeOrderTable.getColumns().clear();
         activeOrderTable.getColumns().addAll(dateCol, timeCol, typeCol, priceCol, sharesCol, statusCol);
@@ -793,7 +888,20 @@ public class MainApp extends Application {
                 }
 
                 updateInfoLabel();
-            } else {
+
+                String msg;
+                while ((msg = tradingEngine.getReturnMsg()) != null) {
+                    String type = "INFO";
+                    if (msg.contains("證交稅")) {
+                        type = "SELL";
+                    }
+                    else if (msg.contains("成交價")) {
+                        type = "BUY";
+                    }
+                    showNotification(msg, type);
+                }
+            }
+            else {
                 timeline.stop();
                 dayIndex++;
                 tickCount = 0;
