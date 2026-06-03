@@ -21,6 +21,7 @@ import java.util.List;
 
 public class WelcomeUI {
 
+    private final java.util.Map<String, MarketMode> saveModeCache = new java.util.HashMap<>();
     private final Stage stage;
     private final StackPane rootContainer;
     private VBox mainMenuRoot;
@@ -110,6 +111,7 @@ public class WelcomeUI {
 
     // 切換到內建的存檔選取清單畫面
     private void switchToArchiveList() {
+        saveModeCache.clear();
         VBox archiveRoot = new VBox(15);
         archiveRoot.setAlignment(Pos.CENTER);
         archiveRoot.setPadding(new Insets(30));
@@ -122,11 +124,69 @@ public class WelcomeUI {
         List<String> saveFiles = SaveManager.getSaveFiles();
         ListView<String> archiveListView = new ListView<>(FXCollections.observableArrayList(saveFiles));
         archiveListView.setPrefHeight(200);
-        archiveListView.setMaxWidth(400);
+        archiveListView.setMaxWidth(450);
 
         if (saveFiles.isEmpty()) {
             archiveListView.setPlaceholder(new Label("目前沒有任何模擬存檔"));
         }
+
+        archiveListView.setCellFactory(param -> new ListCell<String>() {
+            @Override
+            protected void updateItem(String fileName, boolean empty) {
+                super.updateItem(fileName, empty);
+                if (empty || fileName == null) {
+                    setText(null);
+                    setGraphic(null);
+                } else {
+                    HBox cellLayout = new HBox(10);
+                    cellLayout.setAlignment(Pos.CENTER_LEFT);
+
+                    // 顯示存檔名稱
+                    String displayName = fileName.replace(".dat", "").replace(".ser", "");
+                    Label nameLabel = new Label(displayName);
+                    nameLabel.setStyle("-fx-text-fill: #2c2f31; -fx-font-weight: bold;");
+
+                    Label modeBadge = new Label("未知的模式");
+                    
+                    //快取黑魔法：如果記憶體有，直接拿；沒有，才讀硬碟並記錄
+                    MarketMode mode = saveModeCache.get(fileName);
+                    if (mode == null) {
+                        SaveData temp = SaveManager.loadGame(fileName);
+                        if (temp != null) {
+                            mode = temp.getMarketMode();
+                            saveModeCache.put(fileName, mode); // 塞入快取
+                        }
+                    }
+
+                    // 根據模式渲染不同顏色的 GitHub 風格徽章 (Badge)
+                    if (mode != null) {
+                        switch (mode) {
+                            case HISTORY:
+                                modeBadge.setText("⏳ 歷史回測模式");
+                                modeBadge.setStyle("-fx-background-color: #d29922; -fx-text-fill: #1c2128; -fx-padding: 2 8; -fx-background-radius: 4; -fx-font-size: 11px; -fx-font-weight: bold;");
+                                break;
+                            case REALTIME:
+                                modeBadge.setText("🌐 真實即時模式");
+                                modeBadge.setStyle("-fx-background-color: #388bfd; -fx-text-fill: white; -fx-padding: 2 8; -fx-background-radius: 4; -fx-font-size: 11px; -fx-font-weight: bold;");
+                                break;
+                            case AI_RANDOM:
+                                modeBadge.setText("🤖 AI模擬盤模式");
+                                modeBadge.setStyle("-fx-background-color: #56d364; -fx-text-fill: #1c2128; -fx-padding: 2 8; -fx-background-radius: 4; -fx-font-size: 11px; -fx-font-weight: bold;");
+                                break;
+                        }
+                    } else {
+                        modeBadge.setStyle("-fx-background-color: #484f58; -fx-text-fill: #8b949e; -fx-padding: 2 8; -fx-background-radius: 4; -fx-font-size: 11px;");
+                    }
+
+                    // 自動推開間距的彈簧
+                    javafx.scene.layout.Region spacer = new javafx.scene.layout.Region();
+                    HBox.setHgrow(spacer, javafx.scene.layout.Priority.ALWAYS);
+
+                    cellLayout.getChildren().addAll(nameLabel, spacer, modeBadge);
+                    setGraphic(cellLayout);
+                }
+            }
+        });
 
         HBox btnBox = new HBox(15);
         btnBox.setAlignment(Pos.CENTER);
@@ -163,6 +223,7 @@ public class WelcomeUI {
             String selectedFile = archiveListView.getSelectionModel().getSelectedItem();
             if (selectedFile != null && SaveManager.deleteGame(selectedFile)) {
                 archiveListView.getItems().remove(selectedFile);
+                saveModeCache.remove(selectedFile);
             }
         });
 
