@@ -287,6 +287,25 @@ public class MainApp extends Application {
         dateSelector = new DatePicker();
         dateSelector.setPrefWidth(150);
 
+        dateSelector.setOnAction(e -> {
+            java.time.LocalDate selectedDate = dateSelector.getValue();
+            if (selectedDate == null) return;
+            
+            System.out.println("玩家在介面上選了日期: " + selectedDate);
+            
+            /* 💡 留給未來的提示：
+               等確定 StockData 的格式後，把這段註解解開即可：
+               
+            if (historyData != null && !historyData.isEmpty()) {
+                for (int i = 0; i < historyData.size(); i++) {
+                    // 根據未來的格式去比對日期
+                    // this.dayIndex = i;
+                    // break;
+                }
+            }
+            */
+        });
+
         //速度控制條
         Label lblSpeed = new Label("⚡ 模擬速度:");
         speedSlider = new Slider(1, 10, 1); // 1x ~ 10x
@@ -664,7 +683,8 @@ public class MainApp extends Application {
         }));
         timeline.setCycleCount(Animation.INDEFINITE);
         if (speedSlider != null) {
-            timeline.setRate(speedSlider.getValue());
+            int currentSpeed = (int) speedSlider.getValue();
+            timeline.setRate(currentSpeed);
         }
         timeline.play();
     }
