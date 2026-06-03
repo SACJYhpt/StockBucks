@@ -38,8 +38,9 @@ public class MainApp extends Application {
     
     // UI 控制元件（下單交易視窗用）
     private TableView<TradeRecord> historyTable = new TableView<>();
-    private TableView<String> activeOrderTable = new TableView<>();
+    private TableView<Order> activeOrderTable = new TableView<>();
     private ObservableList<TradeRecord> observableRecords = FXCollections.observableArrayList();
+    private ObservableList<Order> observableOrders = FXCollections.observableArrayList();
     private Label currentPriceLabel = new Label("當前市價: --");
     private Label infoLabel = new Label();
     private TextField sharesField = new TextField("1000");
@@ -73,6 +74,8 @@ public class MainApp extends Application {
     private BorderPane tradeView;
     private VBox assetView;
     private VBox orderListView;
+    private VBox activeOrderLayout;
+    private VBox emptyPlaceholder;
 
     // 最愛清單資料結構：Key 是分頁名稱，Value 是該分頁裡的股票列表
     private java.util.LinkedHashMap<String, ObservableList<String>> watchlistData = new java.util.LinkedHashMap<>();
@@ -143,6 +146,7 @@ public class MainApp extends Application {
         }
         
         setupTable();
+        setupActiveOrderTable();
         updateInfoLabel();
 
         // 2. 核心架構：外層主佈局
@@ -386,11 +390,11 @@ public class MainApp extends Application {
 
         // ===== 分頁一：現存委託 (未成交) =====
         Tab activeOrderTab = new Tab("⏳ 現存委託");
-        VBox activeOrderLayout = new VBox(10);
+        activeOrderLayout = new VBox(10);
         activeOrderLayout.setPadding(new Insets(10));
         
         // 目前因為還沒做委託邏輯，先塞一個漂亮的 Placeholder 提示字卡
-        VBox emptyPlaceholder = new VBox(10);
+        emptyPlaceholder = new VBox(10);
         emptyPlaceholder.setAlignment(Pos.CENTER);
         emptyPlaceholder.setPadding(new Insets(50));
         Label lblEmptyIcon = new Label("💤");
@@ -618,19 +622,25 @@ public class MainApp extends Application {
         if (currentPriceLabel.getText().contains("--")) return;
         try {
             int shares = Integer.parseInt(sharesField.getText());
-            double price = Double.parseDouble(currentPriceLabel.getText().replace("當前市價: ", ""));
+            String priceStr = currentPriceLabel.getText().replace("當前市價: ", "");
+            if (priceStr.contains("(")) {
+                priceStr = priceStr.split("\\(")[0].trim();
+            }
+            double price = Double.parseDouble(priceStr);
             String date = (historyData != null && dayIndex < historyData.size()) ? historyData.get(dayIndex).getDate() : "2024-01-01";
 
-            tradingEngine.trading(user, "TestDataTSMC", date, shares, price, isBuy);
-            
-            List<TradeRecord> records = tradingEngine.getDailyRecords();
-            if (!records.isEmpty()) {
-                TradeRecord lastRecord = records.get(records.size() - 1);
-                if (!observableRecords.contains(lastRecord)) {
-                    observableRecords.add(0, lastRecord);
+            tradingEngine.trading(user, "TestDataTSMC", date, tickCount, shares, price, isBuy);
+
+            updateInfoLabel();
+
+            if (activeOrderTable != null) {
+                observableOrders.clear();
+                for (int i = tradingEngine.getPendingOrders().size() - 1; i >= 0; i--) {
+                    observableOrders.add(tradingEngine.getPendingOrders().get(i));
                 }
             }
-            updateInfoLabel();
+        } catch (NumberFormatException ex) {
+            showWarning("請輸入正確的數字格式");
         } catch (Exception ex) {
             ex.printStackTrace();
             showWarning("交易執行失敗");
@@ -646,6 +656,8 @@ public class MainApp extends Application {
     private void setupTable() {
         TableColumn<TradeRecord, String> dateCol = new TableColumn<>("日期");
         dateCol.setCellValueFactory(new PropertyValueFactory<>("date"));
+        TableColumn<TradeRecord, String> timeCol = new TableColumn<>("時間");
+        timeCol.setCellValueFactory(new PropertyValueFactory<>("time"));
         TableColumn<TradeRecord, String> typeCol = new TableColumn<>("類型");
         typeCol.setCellValueFactory(new PropertyValueFactory<>("type"));
         TableColumn<TradeRecord, Double> priceCol = new TableColumn<>("成交價");
@@ -656,9 +668,42 @@ public class MainApp extends Application {
         costCol.setCellValueFactory(new PropertyValueFactory<>("totalCost"));
 
         historyTable.getColumns().clear();
-        historyTable.getColumns().addAll(dateCol, typeCol, priceCol, sharesCol, costCol);
+        historyTable.getColumns().addAll(dateCol, timeCol, typeCol, priceCol, sharesCol, costCol);
         historyTable.setItems(observableRecords);
         historyTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void setupActiveOrderTable() {
+        TableColumn <Order, String> dateCol = new TableColumn<>("委託日期");
+        dateCol.setCellValueFactory(new PropertyValueFactory<>("date"));
+        TableColumn<Order, String> timeCol = new TableColumn<>("時間");
+        timeCol.setCellValueFactory(new PropertyValueFactory<>("time"));
+        TableColumn<Order, Boolean> typeCol = new TableColumn<>("類型");
+        typeCol.setCellValueFactory(new PropertyValueFactory<>("buy"));
+        typeCol.setCellFactory(column -> new TableCell<Order, Boolean>() {
+            @Override
+            protected void updateItem(Boolean isBuy, boolean empty) {
+                super.updateItem(isBuy, empty);
+                if (empty || isBuy == null) {
+                    setText(null);
+                }
+                else {
+                    setText(isBuy ? "買入" : "賣出");
+                }
+            }
+        });
+        TableColumn<Order, Double> priceCol = new TableColumn<>("委託限價");
+        priceCol.setCellValueFactory(new PropertyValueFactory<>("limitPrice"));
+        TableColumn<Order, Integer> sharesCol = new TableColumn<>("委託股數");
+        sharesCol.setCellValueFactory(new PropertyValueFactory<>("shares"));
+        TableColumn<Order, Order.OrderStatus> statusCol = new TableColumn<>("狀態");
+        statusCol.setCellValueFactory(new PropertyValueFactory<>("status"));
+
+        activeOrderTable.getColumns().clear();
+        activeOrderTable.getColumns().addAll(dateCol, timeCol, typeCol, priceCol, sharesCol, statusCol);
+        activeOrderTable.setItems(observableOrders);
+        activeOrderTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
     }
 
     private void handleStartSimulation() {
@@ -703,8 +748,12 @@ public class MainApp extends Application {
         timeline = new Timeline(new KeyFrame(Duration.millis(300), e -> {
             double currentPrice = simulator.getNextPrice();
             if (currentPrice != -1) {
-                currentPriceLabel.setText("當前市價: " + String.format("%.2f", currentPrice));
-                priceSeries.getData().add(new XYChart.Data<>(tickCount++, currentPrice));
+                int currentTime = tickCount;
+                currentTime += 9*60;
+                String currentTimeStr = String.format("%02d:%02d", currentTime / 60, currentTime % 60);
+
+                currentPriceLabel.setText("當前市價: " + String.format("%.2f(%s)", currentPrice, currentTimeStr));
+                priceSeries.getData().add(new XYChart.Data<>(tickCount, currentPrice));
                 if (priceSeries.getNode() != null) {
                     if (currentPrice > yesterdayClose * 1.005) {
                         priceSeries.getNode().setStyle("-fx-stroke: #FF3B30; -fx-stroke-width: 2px;");
@@ -714,9 +763,40 @@ public class MainApp extends Application {
                         priceSeries.getNode().setStyle("-fx-stroke: #8E8E93; -fx-stroke-width: 2px;");
                     }
                 }
+
+                tradingEngine.onPriceUpdate("TestDataTSMC", currentPrice, tickCount++);
+
+                List <TradeRecord> records = tradingEngine.getDailyRecords();
+                observableRecords.clear();
+                for (int i = records.size() - 1; i >= 0; i--) {
+                    observableRecords.add(records.get(i));
+                }
+
+                if (activeOrderTable != null) {
+                    observableOrders.clear();
+
+                    List <Order> uiOrderList = tradingEngine.getAllOrders();
+
+                    for (int i = uiOrderList.size() - 1; i >= 0; i--) {
+                        observableOrders.add(uiOrderList.get(i));
+                    }
+                    
+                    activeOrderLayout.getChildren().clear();
+
+                    if (observableOrders.isEmpty()) {
+                        activeOrderLayout.getChildren().add(emptyPlaceholder);
+                    }
+                    else {
+                        VBox.setVgrow(activeOrderTable, Priority.ALWAYS);
+                        activeOrderLayout.getChildren().add(activeOrderTable);
+                    }
+                }
+
+                updateInfoLabel();
             } else {
                 timeline.stop();
                 dayIndex++;
+                tickCount = 0;
             }
         }));
         timeline.setCycleCount(Animation.INDEFINITE);

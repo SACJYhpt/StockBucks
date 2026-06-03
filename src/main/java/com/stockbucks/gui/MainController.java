@@ -51,7 +51,7 @@ public class MainController {
 
     @FXML
     private void handleTestAdd() {
-        addRecordToUI(new TradeRecord("2330", "2026/05/04", "買入", 805.0, 1000, 1147, 0, 806147.0));
+        // addRecordToUI(new TradeRecord("2330", "2026/05/04", "買入", 805.0, 1000, 1147, 0, 806147.0));
     }
 
     @FXML

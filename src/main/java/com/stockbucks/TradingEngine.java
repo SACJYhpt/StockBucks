@@ -2,6 +2,7 @@ package com.stockbucks;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 
 public class TradingEngine {
@@ -9,6 +10,9 @@ public class TradingEngine {
     private List <TradeRecord> dailyRecords = new ArrayList<>();
     // 追蹤今日零股 零股無法當沖
     private HashMap <String, Integer> todayOddsShares = new HashMap<>();
+    // 維護尚未成交的委託單 等待撮合
+    private List <Order> pendingOrders = new ArrayList<>();
+    private List <Order> allOrders = new ArrayList<>();
 
     private List <String> globalCalender;
     private String currentDate = "";
@@ -18,8 +22,9 @@ public class TradingEngine {
     }
 
     // isBuy: 0: sell, 1: buy
-    public void trading(User user, String stockId, String date, int shares, double price, boolean isBuy) {
+    public void trading(User user, String stockID, String date, int currentMinute, int shares, double price, boolean isBuy) {
         date = date.contains(" ") ? date.split(" ")[0] : date;
+        // 日期切換與交割清算
         if (currentDate.isEmpty()) {
             currentDate = date;
             user.getSettlementManager().SettlementClearing(date, user);
@@ -28,80 +33,148 @@ public class TradingEngine {
             currentDate = date;
             todayOddsShares.clear();
             user.getSettlementManager().SettlementClearing(date, user);
+            for (Order oldOrder: pendingOrders) {
+                oldOrder.setStatus(Order.OrderStatus.INVALID);
+                oldOrder.getUser().getOrderHistory().add(oldOrder);
+            }
+            pendingOrders.clear();
+            allOrders.clear();
         }
         else if (date.compareTo(currentDate) < 0) {
             System.out.println("引擎時間: " + currentDate + "，傳入時間: " + date);
+            return; // 錯誤 不予委託
         }
 
         double totalCost = shares * price;
-
+        long commission = (long) Math.max(1, Math.floor(totalCost * 0.001425));
+        
+        Order order = new Order(user, stockID, date, currentMinute, shares, price, isBuy);
+        order.setStatus(Order.OrderStatus.PENDING);
+        
         if (isBuy) {
-            buying(user, stockId, date, shares, price, totalCost);
+            if (user.getCash() < (totalCost + commission)) {
+                System.out.printf("【提醒】：目前可用現金 %.2f 元，預估需 %.2f 元。本金不足，請留意 T+2 違約交割風險！\n", user.getCash(), (totalCost + commission));
+            }
         }
         else {
-            selling(user, stockId, date, shares, price, totalCost);
+            int totalHoldings = user.getStockQuantity(stockID);
+            int todayOdds = todayOddsShares.getOrDefault(stockID, 0);
+            if (shares > totalHoldings) {
+                System.out.printf("【委託】委託失敗，持有庫存不足");
+                order.setStatus(Order.OrderStatus.FAILED);
+                pendingOrders.add(order);
+                return;
+            }
+            else if (shares > totalHoldings - todayOdds) {
+                System.out.printf("【委託】委託失敗，零股無法當沖");
+                order.setStatus(Order.OrderStatus.FAILED);
+                pendingOrders.add(order);
+                return;
+            }
+        }
+
+        pendingOrders.add(order);
+        allOrders.add(order);
+        String log = String.format("【委託】%s 代號 %s: 限價 %.2f 元，共 %d 股，不含手續費總共%.2f元", isBuy ? "買入" : "賣出", stockID, price, shares, totalCost);
+        System.out.println(log);
+
+        // if (isBuy) {
+        //     buying(user, stockId, date, shares, price, totalCost);
+        // }
+        // else {
+        //     selling(user, stockId, date, shares, price, totalCost);
+        // }
+    }
+
+    public void onPriceUpdate(String stockID, double currentPrice, int currentMinute) {
+        Iterator <Order> iterator = pendingOrders.iterator();
+
+        while(iterator.hasNext()) {
+            Order order = iterator.next();
+
+            if (!order.getStockID().equals(stockID)) {
+                continue;
+            }
+
+            if (order.getStatus() != Order.OrderStatus.PENDING) {
+                iterator.remove();
+                continue;
+            }
+
+            boolean isMatch = false;
+
+            if (order.isBuy()) {
+                if (currentPrice <= order.getLimitPrice()) {
+                    isMatch = true;
+                }
+            }
+            else {
+                if (currentPrice >= order.getLimitPrice()) {
+                    isMatch = true;
+                }
+            }
+
+            if (isMatch) {
+                order.setStatus(Order.OrderStatus.FILLED);
+                actualTrade(order, currentPrice, currentMinute); // 真正交易
+                order.getUser().getOrderHistory().add(order);
+                iterator.remove();
+            }
         }
     }
 
-    private void buying(User user, String stockID, String date, int shares, double price, double totalCost) {
-        long commission = (long) Math.floor(totalCost * 0.001425);
-        if (commission < 1){
-            commission = 1;
+    private void actualTrade(Order order, double matchPrice, int currentMinute) {
+        User user = order.getUser();
+        String stockID = order.getStockID();
+        int shares = order.getShares();
+        String date = order.getDate().contains(" ") ? order.getDate().split(" ")[0] : order.getDate();
+
+        double totalCost = shares * matchPrice;
+        long commission = (long) Math.max(1, Math.floor(totalCost * 0.001425));
+
+        if (order.isBuy()) {
+            totalCost += commission;
+
+            String dateTplus2 = getDateTplus2(date);
+            user.getSettlementManager().addSettlement(dateTplus2, totalCost * -1);
+            user.stockBuying(stockID, shares, totalCost);
+
+            if (shares < 1000) {
+                todayOddsShares.put(stockID, todayOddsShares.getOrDefault(stockID, 0) + shares);
+            }
+
+            String record = String.format("買入代號 %s: 成交價 %.2f 元共 %d 股，手續費 %d 元，總共%.2f元", stockID, matchPrice, shares, commission, totalCost);
+            TradeRecord log = new TradeRecord(stockID, date, currentMinute, "買入", matchPrice, shares, commission, 0, totalCost);
+            dailyRecords.add(log);
+            user.addTradeRecord(log);
+            System.out.println("【交易】交易成功 " + record);
         }
-        totalCost += commission;
-        
-        if (user.getCash() < totalCost) {
-            System.out.println("本金不足 請留意違約交割風險");
+        else {
+            long tax = (long) Math.floor(totalCost*0.003);
+            totalCost -= (commission + tax);
 
-        String dateTplus2 = getDateTplus2(date);
-        user.getSettlementManager().addSettlement(dateTplus2, totalCost * -1);
-        user.stockBuying(stockID, shares, totalCost);
+            String dateTplus2 = getDateTplus2(date);
+            user.getSettlementManager().addSettlement(dateTplus2, totalCost);
+            user.stockSelling(stockID, shares);
 
-        if (shares < 1000) {
-            todayOddsShares.put(stockID, todayOddsShares.getOrDefault(stockID, 0) + shares);
+            String record = String.format("賣出代號 %s: 成交價 %.2f 元共 %d 股，手續費 %d 元，證交稅 %d 元，總共%.2f元", stockID, matchPrice, shares, commission, tax, totalCost);
+            TradeRecord log = new TradeRecord(stockID, date, currentMinute, "賣出", matchPrice, shares, commission, tax, totalCost);
+            dailyRecords.add(log);
+            user.addTradeRecord(log);
+            System.out.println("【交易】交易成功 " + record);
         }
-
-        String record = String.format("買入代號 %s: 成交價 %.2f 元共 %d 股，手續費 %d 元，總共%.2f元", stockID, price, shares, commission, totalCost);
-        TradeRecord log = new TradeRecord(stockID, date, "買入", price, shares, commission, 0, totalCost);
-        dailyRecords.add(log);
-        user.addTradeRecord(log);
-        System.out.println("交易成功: " + record);
-        }
-    }
-
-    private void selling(User user, String stockID, String date, int shares, double price, double totalCost) {
-        int totalHoldings = user.getStockQuantity(stockID);
-        int todayOdds = todayOddsShares.getOrDefault(stockID, 0);
-
-        if (shares > totalHoldings) {
-            System.out.println("持有庫存不足");
-            return;
-        }
-        else if (shares > totalHoldings - todayOdds) {
-            System.out.println("交易失敗，零股無法當沖");
-            return;
-        }
-
-        long commission = (long) Math.floor(totalCost * 0.001425);
-        if (commission < 1) {
-            commission = 1;
-        }
-        long tax = (long) Math.floor(totalCost*0.003);
-        totalCost -= commission+tax;
-
-        String dateTplus2 = getDateTplus2(date);
-        user.getSettlementManager().addSettlement(dateTplus2, totalCost);
-        user.stockSelling(stockID, shares);
-
-        String record = String.format("賣出代號 %s: 成交價 %.2f 元共 %d 股，手續費 %d 元，證交稅 %d 元，總共%.2f元", stockID, price, shares, commission, tax, totalCost);
-        TradeRecord log = new TradeRecord(stockID, date, "賣出", price, shares, commission, tax, totalCost);
-        dailyRecords.add(log);
-        user.addTradeRecord(log);
-        System.out.println("交易成功: " + record);
     }
 
     public List <TradeRecord> getDailyRecords() {
-        return dailyRecords;
+        return this.dailyRecords;
+    }
+
+    public List <Order> getPendingOrders() {
+        return this.pendingOrders;
+    }
+
+    public List <Order> getAllOrders() {
+        return this.allOrders;
     }
 
     public String getDateTplus2(String date) {

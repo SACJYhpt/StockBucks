@@ -13,9 +13,14 @@ public class User implements Serializable {
     private LinkedHashMap <String, StockHoldings> holdings = new LinkedHashMap<>();
     private SettlementManager settlement = new SettlementManager();
     private List <TradeRecord> tradeHistory = new ArrayList<>();
+    private List <Order> orderHistory = new ArrayList<>();
 
     public List <TradeRecord> getTradeHistory() {
         return tradeHistory;
+    }
+
+    public List <Order> getOrderHistory() {
+        return orderHistory;
     }
 
     public void addTradeRecord(TradeRecord record) {

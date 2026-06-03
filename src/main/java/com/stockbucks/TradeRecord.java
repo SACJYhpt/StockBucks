@@ -4,6 +4,7 @@ public class TradeRecord implements Serializable {
     private static final long serialVersionUID = 1L;
     private String stockID;
     private String date;
+    private int time;
     private String type;
     private double price;
     private int shares;
@@ -11,15 +12,21 @@ public class TradeRecord implements Serializable {
     private double tax;
     private double totalCost;
 
-    public TradeRecord(String stockID, String date, String type, double price, int shares, double commission, double tax, double totalCost) {
+    public TradeRecord(String stockID, String date, int time, String type, double price, int shares, double commission, double tax, double totalCost) {
         this.stockID = stockID;
         this.date = date;
+        this.time = time;
         this.type = type;
         this.price = price;
         this.shares = shares;
         this.commission = commission;
         this.tax = tax;
         this.totalCost = totalCost;
+    }
+
+    private String convertMinToTimeString(int time) {
+        time += 9*60;
+        return String.format("%02d:%02d", time/60, time%60);
     }
 
     @Override
@@ -33,6 +40,10 @@ public class TradeRecord implements Serializable {
 
     public String getDate() {
         return date;
+    }
+
+    public String getTime() {
+        return convertMinToTimeString(time);
     }
 
     public String getType() {
