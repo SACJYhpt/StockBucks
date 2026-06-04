@@ -1,6 +1,6 @@
 package com.stockbucks;
 
-import com.stockbucks.ai.mode.MarketMode;
+import com.stockbucks.api.mode.MarketMode;
 
 import java.io.Serializable;
 import java.util.ArrayList;

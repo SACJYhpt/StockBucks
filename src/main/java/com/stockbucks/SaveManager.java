@@ -3,7 +3,7 @@ package com.stockbucks;
 import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
-import com.stockbucks.ai.mode.MarketMode;
+import com.stockbucks.api.mode.MarketMode;
 
 public class SaveManager {
     // 存檔資料夾名稱

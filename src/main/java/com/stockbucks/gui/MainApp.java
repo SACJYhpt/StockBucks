@@ -61,7 +61,7 @@ public class MainApp extends Application {
     private int tickCount = 0;
     private List<StockData> historyData = new ArrayList<>();
     private int dayIndex = 0;
-    private com.stockbucks.ai.mode.MarketMode marketMode = com.stockbucks.ai.mode.MarketMode.HISTORY;
+    private com.stockbucks.api.mode.MarketMode marketMode = com.stockbucks.api.mode.MarketMode.HISTORY;
     private Timeline timeline;
     private static final double BASE_INTERVAL_MS = 1000.0;
 
@@ -127,7 +127,7 @@ public class MainApp extends Application {
         } else {
             this.user = new User();
             this.dayIndex = 0;
-            this.marketMode = com.stockbucks.ai.mode.MarketMode.HISTORY;
+            this.marketMode = com.stockbucks.api.mode.MarketMode.HISTORY;
         }
 
         //如果是全新開局，或是舊存檔完全沒有自選股資料，才初始化預設的「全部最愛」
@@ -332,7 +332,7 @@ public class MainApp extends Application {
         backtestControlBar.getChildren().addAll(lblDate, dateSelector, new Separator(javafx.geometry.Orientation.VERTICAL), lblSpeed, speedSlider, speedLabel);
 
         //動態顯示核心：根據從 WelcomeUI 傳進來的 marketMode 決定生死
-        if (this.marketMode == com.stockbucks.ai.mode.MarketMode.HISTORY) {
+        if (this.marketMode == com.stockbucks.api.mode.MarketMode.HISTORY) {
             backtestControlBar.setVisible(true);
             backtestControlBar.setManaged(true);
         } else {
@@ -1106,8 +1106,15 @@ public class MainApp extends Application {
         assetTitle.getStyleClass().add(Styles.TITLE_2);
         assetView.getChildren().addAll(assetTitle, new Separator());
 
-        // 2. 獲取核心金流數據
-        double cash = user.getCash();
+        // 建立雙分頁滑動面板
+        TabPane assetTabPane = new TabPane();
+        assetTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE); // 禁用關閉按鈕
+        VBox.setVgrow(assetTabPane, Priority.ALWAYS);
+
+        //第一分頁：未實現資產
+        Tab unrealizedTab = new Tab("📈 未實現資產");
+        VBox unrealizedContent = new VBox(15);
+        unrealizedContent.setPadding(new Insets(15, 0, 0, 0));
         
         // 取得當前模擬的股票最新價格
         double currentPrice = 0.0;
@@ -1120,8 +1127,20 @@ public class MainApp extends Application {
         // 呼叫 User 內的新方法，精準計算出所有庫存股票的總市值
         double totalStockValue = user.getTotalPresentValue("TestDataTSMC", currentPrice);
         
-        // 總資產 = 現金 + 股票總市值
-        double totalAsset = cash + totalStockValue;
+        // 總資產 = 股票總市值
+        double totalAsset = totalStockValue;
+
+        //總原始購買成本
+        double totalStockCost = 0.0;
+        java.util.HashMap<String, StockHoldings> holdings = user.getHolding();
+        if (holdings != null && !holdings.isEmpty()) {
+            for (String stockID : holdings.keySet()) {
+                totalStockCost += user.getOneTotalCost(stockID);
+            }
+        }
+
+        double totalReturn = totalAsset - totalStockCost; // 報酬金額
+        double returnRate = totalStockCost > 0 ? (totalReturn / totalStockCost) * 100 : 0.0; // 報酬率
 
         // 3. 【資產總現值面板】 (仿手機 App 頂部字卡樣式)
         VBox totalAssetPanel = new VBox(8);
@@ -1134,11 +1153,25 @@ public class MainApp extends Application {
         Label lblTotalAssetValue = new Label(String.format("$ %,.2f", totalAsset));
         lblTotalAssetValue.setStyle("-fx-font-size: 28px; -fx-font-weight: bold; -fx-text-fill: #adbac7;");
         
-        Label lblCashAndStock = new Label(String.format("可用現金: $ %,.2f  |  股票總市值: $ %,.2f", cash, totalStockValue));
+        Label lblCashAndStock = new Label(String.format("原始投資總成本: $ %,.2f", totalStockCost));
         lblCashAndStock.setStyle("-fx-text-fill: #58a6ff; -fx-font-size: 13px;");
+
+        //歷史總報酬: +$ 45,000.00 (+7.50%) 或 -$ 12,000.00 (-2.30%)
+        String sign = totalReturn >= 0 ? "+" : ""; // 賺錢補上加號
+        Label lblTotalReturn = new Label(String.format("預估未實現損益: %s$ %,.2f (%s %.2f%%)", 
+                sign, totalReturn, sign, returnRate));
+
+        //顏色分流，如果想改成美股反過來，可以把底下的顏色代碼互換
+        if (totalReturn > 0) {
+            lblTotalReturn.setStyle("-fx-text-fill: #da3633; -fx-font-size: 13px; -fx-font-weight: bold;"); // 鮮明紅
+        } else if (totalReturn < 0) {
+            lblTotalReturn.setStyle("-fx-text-fill: #2da44e; -fx-font-size: 13px; -fx-font-weight: bold;"); // 活潑綠
+        } else {
+            lblTotalReturn.setStyle("-fx-text-fill: #adbac7; -fx-font-size: 13px;"); // 平盤灰
+        }
         
-        totalAssetPanel.getChildren().addAll(lblPanelTitle, lblTotalAssetValue, lblCashAndStock);
-        assetView.getChildren().add(totalAssetPanel);
+        totalAssetPanel.getChildren().addAll(lblPanelTitle, lblTotalAssetValue, lblCashAndStock, lblTotalReturn);
+        unrealizedContent.getChildren().add(totalAssetPanel);
 
         // 4. 【左右並排區】區域：左邊放圓餅圖，右邊放比例明細
         HBox chartSection = new HBox(40);
@@ -1159,19 +1192,7 @@ public class MainApp extends Application {
         lblListTitle.getStyleClass().addAll(Styles.TEXT_BOLD, Styles.TITLE_4);
         legendList.getChildren().add(lblListTitle);
 
-        // A. 塞入「可用現金」到圖表與清單
-        if (cash > 0) {
-            pieChart.getData().add(new javafx.scene.chart.PieChart.Data("可用現金", cash));
-            double cashPercent = totalAsset > 0 ? (cash / totalAsset) * 100 : 0;
-            
-            Label lblCashData = new Label(String.format("🔵 可用現金: %.1f%% ($ %,.2f)", cashPercent, cash));
-            lblCashData.setStyle("-fx-font-size: 14px; -fx-text-fill: #58a6ff;");
-            legendList.getChildren().add(lblCashData);
-        }
-
-        // B. 迴圈遍歷 user.getHoldings()，動態將每檔擁有的股票塞入圖表與明細
-        java.util.HashMap<String, StockHoldings> holdings = user.getHolding();
-        
+        //迴圈遍歷 user.getHoldings()，動態將每檔擁有的股票塞入圖表與明細
         if (holdings != null && !holdings.isEmpty()) {
             for (String stockID : holdings.keySet()) {
                 // 計算這檔股票的當前價值
@@ -1189,9 +1210,10 @@ public class MainApp extends Application {
                     // 計算此個股佔總資產的百分比
                     double stockPercent = totalAsset > 0 ? (eachStockValue / totalAsset) * 100 : 0;
                     int shares = user.getStockQuantity(stockID);
+                    double eachStockCost = user.getOneTotalCost(stockID);
 
-                    Label lblStockData = new Label(String.format("🟢 庫存股票 [%s]: %.1f%% (%d 股 | 市值 $ %,.2f)", 
-                            stockID, stockPercent, shares, eachStockValue));
+                    Label lblStockData = new Label(String.format("🟢 庫存股票 [%s]: %.1f%% (%d 股 | 市值 $ %,.2f | 成本 $ %,.2f)", 
+                            stockID, stockPercent, shares, eachStockValue, eachStockCost));
                     lblStockData.setStyle("-fx-font-size: 14px; -fx-text-fill: #57ab5a;");
                     legendList.getChildren().add(lblStockData);
                 }
@@ -1200,13 +1222,55 @@ public class MainApp extends Application {
 
         // C. 防呆：如果完全沒資產
         if (totalAsset == 0) {
-            pieChart.getData().add(new javafx.scene.chart.PieChart.Data("空帳戶", 1));
-            legendList.getChildren().add(new Label("⚠️ 目前帳戶內沒有任何資產或庫存。"));
+            pieChart.getData().add(new javafx.scene.chart.PieChart.Data("無庫存股票", 1));
+            legendList.getChildren().add(new Label("⚠️ 目前帳戶內沒有任何股票庫存。"));
         }
 
         // 將圖表與數據面板並排組合
         chartSection.getChildren().addAll(pieChart, legendList);
-        assetView.getChildren().add(chartSection);
+        unrealizedContent.getChildren().add(chartSection);
+        unrealizedTab.setContent(unrealizedContent);
+
+        //第二分頁：已實現損益
+        Tab realizedTab = new Tab("💰 已實現損益");
+        VBox realizedContent = new VBox(15);
+        realizedContent.setPadding(new Insets(15, 10, 10, 10));
+
+        // 取得使用者已經平倉（賣出）結算後的累積已實現利潤
+        double realizedProfit = user.getRealizedProfit();
+
+        // 建立已實現損益字卡面板
+        VBox realizedPanel = new VBox(12);
+        realizedPanel.setPadding(new Insets(20));
+        realizedPanel.setStyle("-fx-background-color: #1c2128; -fx-background-radius: 8; -fx-border-color: #30363d; -fx-border-radius: 8;");
+        realizedPanel.setAlignment(Pos.CENTER_LEFT);
+
+        Label lblRealizedTitle = new Label("累積已實現損益 (TWD)");
+        lblRealizedTitle.setStyle("-fx-text-fill: #8b949e; -fx-font-size: 14px;");
+
+        String realizedSign = realizedProfit >= 0 ? "+" : "";
+        Label lblRealizedValue = new Label(String.format("%s$ %,.2f", realizedSign, realizedProfit));
+        lblRealizedValue.setStyle("-fx-font-size: 32px; -fx-font-weight: bold;");
+
+        // 根據正負損益進行強烈的顏色流動（紅賺綠賠）
+        if (realizedProfit > 0) {
+            lblRealizedValue.setStyle(lblRealizedValue.getStyle() + " -fx-text-fill: #da3633;");
+        } else if (realizedProfit < 0) {
+            lblRealizedValue.setStyle(lblRealizedValue.getStyle() + " -fx-text-fill: #2da44e;");
+        } else {
+            lblRealizedValue.setStyle(lblRealizedValue.getStyle() + " -fx-text-fill: #adbac7;");
+        }
+
+        Label lblRealizedDesc = new Label("※ 此數值為您在本次模擬交易中，已賣出股票平倉結算後的「實際淨賺賠總額」。");
+        lblRealizedDesc.setStyle("-fx-text-fill: #8b949e; -fx-font-size: 12px; -fx-font-style: italic;");
+
+        realizedPanel.getChildren().addAll(lblRealizedTitle, lblRealizedValue, lblRealizedDesc);
+        realizedContent.getChildren().add(realizedPanel);
+        realizedTab.setContent(realizedContent);
+
+        //最後將兩個分頁加入資產總覽主畫面
+        assetTabPane.getTabs().addAll(unrealizedTab, realizedTab);
+        assetView.getChildren().add(assetTabPane);
     }
 
     public static void startApp(String[] args) {

@@ -12,10 +12,10 @@ module com.stockbucks {
     exports com.stockbucks;
     exports com.stockbucks.gui;
 
-    exports com.stockbucks.ai;
-    exports com.stockbucks.ai.assistant;
-    exports com.stockbucks.ai.client;
-    exports com.stockbucks.ai.mode;
-    exports com.stockbucks.ai.model;
-    exports com.stockbucks.ai.data;
+    exports com.stockbucks.api;
+    exports com.stockbucks.api.ai;
+    exports com.stockbucks.api.config;
+    exports com.stockbucks.api.mode;
+    exports com.stockbucks.api.stock;
+    exports com.stockbucks.api.debug;
 }

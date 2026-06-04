@@ -15,6 +15,8 @@ public class User implements Serializable {
     private List <TradeRecord> tradeHistory = new ArrayList<>();
     private List <Order> orderHistory = new ArrayList<>();
 
+    private double realizedProfit = 0.0;
+
     public List <TradeRecord> getTradeHistory() {
         return tradeHistory;
     }
@@ -46,6 +48,16 @@ public class User implements Serializable {
             return cost;
         }
         return 0;
+    }
+
+    //提供給外部（如 TradingEngine 或 MainApp）在賣出股票成功時，用來灌入已實現損益的方法
+    public void addRealizedProfit(double amount) {
+        this.realizedProfit += amount;
+    }
+
+    //給 MainApp.java 分頁顯示用的開關
+    public double getRealizedProfit() {
+        return this.realizedProfit;
     }
 
     public double getOneTotalCost(String stockID) {

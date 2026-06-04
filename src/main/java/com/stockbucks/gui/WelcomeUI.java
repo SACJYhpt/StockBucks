@@ -4,7 +4,7 @@ import atlantafx.base.theme.Styles;
 import com.stockbucks.SaveData;
 import com.stockbucks.SaveManager;
 import com.stockbucks.User;
-import com.stockbucks.ai.mode.MarketMode;
+import com.stockbucks.api.mode.MarketMode;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
