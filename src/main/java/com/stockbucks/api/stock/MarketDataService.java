@@ -18,7 +18,7 @@ import java.util.function.Consumer;
  */
 public class MarketDataService {
     private static final LocalDate DEFAULT_START_DATE = LocalDate.of(2010, 1, 4); // TWSE 長期歷史資料的預設起始日。
-    private static final String DEFAULT_PROVIDER_CHAIN = "broker,web,fugle,twse,finmind,local"; // 從最真實到最保底的資料來源順序。
+    private static final String DEFAULT_PROVIDER_CHAIN = "broker,fugle,web,twse,finmind,local"; // 依最小時間單位排序：券商日內資料、Fugle 盤中報價、網頁近即時、日資料、本地備援。
 
     private final List<StockDataClient> clients; // fallback 引擎會依序嘗試這些資料來源。
     private String lastProviderUsed = ""; // 最近一次成功回傳資料的來源。
