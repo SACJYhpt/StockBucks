@@ -2,7 +2,9 @@ package com.stockbucks.gui;
 
 import atlantafx.base.theme.PrimerDark;
 import atlantafx.base.theme.Styles;
-import com.stockbucks.*; 
+import com.stockbucks.*;
+import com.stockbucks.api.AIHub;
+
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -71,6 +73,8 @@ public class MainApp extends Application {
     private VBox sidebar;
     private boolean isSidebarExpanded = true;
     private Stage stage;
+
+    private AIHub aiHub = new AIHub(); // 初始化 AI 入口
 
     // 獨立出來的四個子畫面 Container
     private StackPane marketView;
@@ -256,14 +260,10 @@ public class MainApp extends Application {
         startBtn.getStyleClass().add(Styles.ACCENT);
         startBtn.setOnAction(e -> handleStartSimulation());
 
-        Button saveBtn = new Button("儲存模擬");
-        saveBtn.getStyleClass().addAll(Styles.ACCENT, Styles.BUTTON_OUTLINED);
-        saveBtn.setOnAction(e -> handleSaveGame());
-
         Region topSpacer = new Region();
         HBox.setHgrow(topSpacer, Priority.ALWAYS);
 
-        topSearchBar.getChildren().addAll(stockSearchField, startBtn, saveBtn, topSpacer, currentPriceLabel);
+        topSearchBar.getChildren().addAll(stockSearchField, startBtn, topSpacer, currentPriceLabel);
 
         // --- (B) 中間圖表與交易控制區 ---
         VBox centerArea = new VBox(10);
@@ -342,14 +342,21 @@ public class MainApp extends Application {
 
         centerArea.getChildren().addAll(backtestControlBar,lineChart, tradeControlPanel);
 
-        // --- (C) 右側 AI 問答區塊 (仿 image_b34f08.jpg 右側「研究」欄位) ---
+        // --- (C) 右側 AI 問答區塊 ---
         VBox aiSection = new VBox(15);
         aiSection.setPrefWidth(300);
         aiSection.setPadding(new Insets(0, 0, 0, 15));
         aiSection.setStyle("-fx-border-color: #30363d; -fx-border-width: 0 0 0 1;"); // 左邊界線
 
+        HBox aiHeader = new HBox(8);
+        aiHeader.setAlignment(Pos.CENTER_LEFT);
         Label aiTitle = new Label("AI 投資助理");
         aiTitle.getStyleClass().add(Styles.TITLE_3);
+
+        // 小綠燈/小紅燈動態狀態
+        Label aiStatusDot = new Label(aiHub.isAiReady() ? "● Ready" : "● Offline");
+        aiStatusDot.setStyle(aiHub.isAiReady() ? "-fx-text-fill: #2da44e; -fx-font-size: 11px;" : "-fx-text-fill: #da3633; -fx-font-size: 11px;");
+        aiHeader.getChildren().addAll(aiTitle, aiStatusDot);
 
         TextArea aiChatArea = new TextArea();
         aiChatArea.setEditable(false);
@@ -364,7 +371,80 @@ public class MainApp extends Application {
         askBtn.getStyleClass().add(Styles.ACCENT);
         askBtn.setMaxWidth(Double.MAX_VALUE);
 
-        aiSection.getChildren().addAll(aiTitle, aiChatArea, aiInputField, askBtn);
+        Runnable sendAiMessageAction = () -> {
+            String question = aiInputField.getText().trim();
+            if (question.isEmpty()) return;
+
+            // 1. 將玩家問題打印到畫面上，並清空輸入框
+            aiChatArea.appendText("【我】: " + question + "\n\n");
+            aiInputField.clear();
+
+            // 2. 停用輸入元件，避免玩家在 AI 回應前連續轟炸
+            aiInputField.setDisable(true);
+            askBtn.setDisable(true);
+            aiChatArea.appendText("【AI 助理】: ⚡ 正在通靈並調閱當前財務與 K 線數據中...\n");
+ 
+            double currentPrice = 0.0;
+            try {
+                String priceStr = currentPriceLabel.getText().replace("當前市價: ", "");
+                if (priceStr.contains("(")) {
+                    priceStr = priceStr.split("\\(")[0].trim();
+                }
+                currentPrice = Double.parseDouble(priceStr);
+            } catch (Exception e) {
+                // 如果模擬還沒點開始，先抓 historyData 當前或第一筆的收盤價作為預設值
+                currentPrice = (historyData != null && !historyData.isEmpty() && dayIndex < historyData.size()) 
+                        ? historyData.get(dayIndex).getClose() : 600.0;
+            }
+
+            final double finalPrice = currentPrice;
+            final String currentStockId = "TestDataTSMC";
+
+            // 4. 開啟多執行緒非同步呼叫，防止 AI 網路延遲導致主畫面 K 線、時脈卡死崩潰
+            new Thread(() -> {
+                try {
+                    // 呼叫新版 AIHub 提供的完整數據對話方法
+                    String aiResponse = aiHub.answerQuestion(
+                            user, 
+                            tradingEngine, 
+                            historyData, 
+                            currentStockId, 
+                            finalPrice, 
+                            question
+                    );
+
+                    // 5. 拿到結果後，回到 JavaFX 主執行緒更新 UI
+                    Platform.runLater(() -> {
+                        // 移除「正在通靈中...」的提示，換成真正的答案
+                        String currentText = aiChatArea.getText();
+                        if (currentText.contains("【AI 助理】: ⚡ 正在通靈並調閱當前財務與 K 線數據中...")) {
+                            currentText = currentText.replace("【AI 助理】: ⚡ 正在通靈並調閱當前財務與 K 線數據中...", "");
+                            aiChatArea.setText(currentText);
+                        }
+                        
+                        aiChatArea.appendText("【AI 助理】:\n" + aiResponse + "\n\n");
+                        aiChatArea.setScrollTop(Double.MAX_VALUE); // 自動滾動到最底部
+                        
+                        // 恢復元件可用性
+                        aiInputField.setDisable(false);
+                        askBtn.setDisable(false);
+                        aiInputField.requestFocus();
+                    });
+                } catch (Exception ex) {
+                    Platform.runLater(() -> {
+                        aiChatArea.appendText("【系統錯誤】: ❌ 呼叫 AI 失敗。原因: " + ex.getMessage() + "\n\n");
+                        aiInputField.setDisable(false);
+                        askBtn.setDisable(false);
+                    });
+                }
+            }).start();
+        };
+
+        // 綁定事件：不論點擊按鈕或在輸入框內敲 Enter，皆能完美送出
+        askBtn.setOnAction(e -> sendAiMessageAction.run());
+        aiInputField.setOnAction(e -> sendAiMessageAction.run());
+
+        aiSection.getChildren().addAll(aiHeader, aiChatArea, aiInputField, askBtn);
 
         // --- 組合 ---
         tradeView.setTop(topSearchBar);
@@ -465,6 +545,14 @@ public class MainApp extends Application {
             menuButtons.add(btn);
         }
 
+        //儲存檔案按鈕
+        Button sideSaveBtn = new Button("💾  儲存模擬進度");
+        sideSaveBtn.setMaxWidth(Double.MAX_VALUE);
+        sideSaveBtn.setAlignment(Pos.BASELINE_LEFT);
+        sideSaveBtn.getStyleClass().addAll(Styles.ACCENT, Styles.FLAT);
+        sideSaveBtn.setPadding(new Insets(10, 15, 10, 15));
+        sideSaveBtn.setOnAction(e -> handleSaveGame()); // 觸發原本寫好的 handleSaveGame()
+
         // 側邊欄收合動態控制
         toggleBtn.setOnAction(e -> {
             if (isSidebarExpanded) {
@@ -472,12 +560,14 @@ public class MainApp extends Application {
                 for (int i = 0; i < menuButtons.size(); i++) {
                     menuButtons.get(i).setText(MenuType.values()[i].icon);
                 }
+                sideSaveBtn.setText("💾");
                 isSidebarExpanded = false;
             } else {
                 box.setPrefWidth(220);
                 for (int i = 0; i < menuButtons.size(); i++) {
                     menuButtons.get(i).setText(MenuType.values()[i].fullText);
                 }
+                sideSaveBtn.setText("💾  儲存模擬進度");
                 isSidebarExpanded = true;
             }
         });
@@ -496,7 +586,12 @@ public class MainApp extends Application {
                 box.getChildren().add(spacer);
                 
                 // 加一條分割線
-                box.getChildren().add(new Separator()); 
+                box.getChildren().add(new Separator());
+                box.getChildren().add(sideSaveBtn);
+                box.getChildren().add(new Separator());
+                box.getChildren().add(menuButtons.get(i)); 
+
+                break;
             }
             
             box.getChildren().add(btn);
