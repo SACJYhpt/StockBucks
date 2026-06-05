@@ -121,7 +121,7 @@ public class FugleStockDataClient implements StockDataClient {
         try {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new RuntimeException("Fugle HTTP " + response.statusCode() + ": " + response.body());
+                throw new RuntimeException("Fugle HTTP " + response.statusCode() + ": " + summarizeResponseBody(response.body()));
             }
             return response.body();
         } catch (IOException e) {
@@ -130,5 +130,18 @@ public class FugleStockDataClient implements StockDataClient {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Fugle fetch interrupted", e);
         }
+    }
+
+    private String summarizeResponseBody(String body) {
+        if (body == null || body.isBlank()) {
+            return "empty response body";
+        }
+        String cleaned = body
+                .replaceAll("(?is)<script.*?</script>", " ")
+                .replaceAll("(?is)<style.*?</style>", " ")
+                .replaceAll("<[^>]+>", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        return cleaned.length() > 160 ? cleaned.substring(0, 160) + "..." : cleaned;
     }
 }

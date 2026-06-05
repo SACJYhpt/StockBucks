@@ -11,7 +11,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +30,7 @@ import java.util.regex.Pattern;
 public class WebStockScraperClient implements StockDataClient {
     private static final String DEFAULT_GOOGLE_TEMPLATE = "https://www.google.com/finance/quote/%s:TPE?hl=zh-TW";
     private static final String DEFAULT_YAHOO_TEMPLATE = "https://tw.stock.yahoo.com/quote/%s.TW";
+    private static final String DEFAULT_YAHOO_CHART_TEMPLATE = "https://query1.finance.yahoo.com/v8/finance/chart/%s.TW?period1=%d&period2=%d&interval=1d";
     private static final String DEFAULT_CNBC_TEMPLATE = "https://www.cnbc.com/quotes/%s.TW";
     private static final String DEFAULT_WANTGOO_TEMPLATE = "https://www.wantgoo.com/stock/%s";
 
@@ -34,6 +38,7 @@ public class WebStockScraperClient implements StockDataClient {
     private final String sourceOrder; // 例如 google,yahoo,cnbc,msn,wantgoo。
     private final String googleTemplate; // Google Finance 公開報價頁。
     private final String yahooTemplate; // Yahoo 股市公開報價頁。
+    private final String yahooChartTemplate; // Yahoo chart JSON，用來補 web 歷史日 K。
     private final String cnbcTemplate; // CNBC 公開報價頁。
     private final String msnTemplate; // 若團隊有穩定 MSN URL 模板，可填這裡。
     private final String wantgooTemplate; // WantGoo 公開股票頁。
@@ -47,6 +52,7 @@ public class WebStockScraperClient implements StockDataClient {
         this.sourceOrder = EnvironmentConfig.first("google,yahoo,cnbc,msn,wantgoo", "WEB_STOCK_SOURCES", "STOCKBUCKS_WEB_STOCK_SOURCES");
         this.googleTemplate = EnvironmentConfig.first(DEFAULT_GOOGLE_TEMPLATE, "WEB_STOCK_GOOGLE_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_GOOGLE_URL_TEMPLATE");
         this.yahooTemplate = EnvironmentConfig.first(DEFAULT_YAHOO_TEMPLATE, "WEB_STOCK_YAHOO_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_YAHOO_URL_TEMPLATE");
+        this.yahooChartTemplate = EnvironmentConfig.first(DEFAULT_YAHOO_CHART_TEMPLATE, "WEB_STOCK_YAHOO_CHART_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_YAHOO_CHART_URL_TEMPLATE");
         this.cnbcTemplate = EnvironmentConfig.first(DEFAULT_CNBC_TEMPLATE, "WEB_STOCK_CNBC_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_CNBC_URL_TEMPLATE");
         this.msnTemplate = EnvironmentConfig.first("", "WEB_STOCK_MSN_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_MSN_URL_TEMPLATE");
         this.wantgooTemplate = EnvironmentConfig.first(DEFAULT_WANTGOO_TEMPLATE, "WEB_STOCK_WANTGOO_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_WANTGOO_URL_TEMPLATE");
@@ -113,7 +119,7 @@ public class WebStockScraperClient implements StockDataClient {
 
     @Override
     public List<StockData> fetchDailyHistory(String stockId, LocalDate fromDate, LocalDate toDate) {
-        return List.of();
+        return fetchYahooChartHistory(stockId, fromDate, toDate);
     }
 
     @Override
@@ -131,6 +137,7 @@ public class WebStockScraperClient implements StockDataClient {
         Map<String, String> endpoints = new LinkedHashMap<>();
         endpoints.put("googleFinanceQuote", googleTemplate);
         endpoints.put("yahooTwQuote", yahooTemplate);
+        endpoints.put("yahooChartHistory", yahooChartTemplate);
         endpoints.put("cnbcQuote", cnbcTemplate);
         if (!msnTemplate.isBlank()) {
             endpoints.put("msnMoneyQuote", msnTemplate);
@@ -157,7 +164,7 @@ public class WebStockScraperClient implements StockDataClient {
                 extractByClass(html, "YMlKec fxKbKc"),
                 firstRegex(html, "\"price\"\\s*:\\s*\"?([0-9,]+(?:\\.[0-9]+)?)\"?")
         );
-        return price <= 0 ? null : new StockQuote(stockId, cleanText(name), price, 0, 0, 0, 0, "web:google");
+        return price <= 0 ? null : new StockQuote(stockId, cleanStockName(name), price, 0, 0, 0, 0, "web:google");
     }
 
     private StockQuote fetchYahooQuote(String stockId) {
@@ -172,10 +179,9 @@ public class WebStockScraperClient implements StockDataClient {
         );
         double price = firstPositivePrice(
                 firstRegex(html, "\"regularMarketPrice\"\\s*:\\s*\\{\\s*\"raw\"\\s*:\\s*([0-9,]+(?:\\.[0-9]+)?)"),
-                firstRegex(html, "<fin-streamer[^>]+data-field=[\"']regularMarketPrice[\"'][^>]*>(.*?)</fin-streamer>"),
-                firstRegex(html, "\"price\"\\s*:\\s*\"?([0-9,]+(?:\\.[0-9]+)?)\"?")
+                firstRegex(html, "<fin-streamer[^>]+data-field=[\"']regularMarketPrice[\"'][^>]*>(.*?)</fin-streamer>")
         );
-        return price <= 0 ? null : new StockQuote(stockId, cleanText(name), price, 0, 0, 0, 0, "web:yahoo");
+        return price <= 0 ? null : new StockQuote(stockId, cleanStockName(name), price, 0, 0, 0, 0, "web:yahoo");
     }
 
     private StockQuote fetchCnbcQuote(String stockId) {
@@ -184,16 +190,18 @@ public class WebStockScraperClient implements StockDataClient {
         }
 
         String html = get(formatTemplate(cnbcTemplate, stockId));
+        if (isCnbcNotFoundPage(html)) {
+            return null;
+        }
         String name = firstNonBlank(
                 extractMeta(html, "og:title"),
                 firstRegex(html, "\"name\"\\s*:\\s*\"([^\"]+)\"")
         );
         double price = firstPositivePrice(
-                firstRegex(html, "\"last\"\\s*:\\s*\"?([0-9,]+(?:\\.[0-9]+)?)\"?"),
-                firstRegex(html, "\"price\"\\s*:\\s*\"?([0-9,]+(?:\\.[0-9]+)?)\"?"),
-                firstRegex(html, "QuoteStrip-lastPrice[^>]*>\\s*([0-9,]+(?:\\.[0-9]+)?)")
+                firstRegex(html, "QuoteStrip-lastPrice[^>]*>\\s*([0-9,]+(?:\\.[0-9]+)?)"),
+                firstRegex(html, "\"last\"\\s*:\\s*\"?([0-9,]+(?:\\.[0-9]+)?)\"?")
         );
-        return price <= 0 ? null : new StockQuote(stockId, cleanText(name), price, 0, 0, 0, 0, "web:cnbc");
+        return price <= 0 ? null : new StockQuote(stockId, cleanStockName(name), price, 0, 0, 0, 0, "web:cnbc");
     }
 
     private StockQuote fetchMsnQuote(String stockId) {
@@ -211,7 +219,7 @@ public class WebStockScraperClient implements StockDataClient {
                 firstRegex(html, "\"price\"\\s*:\\s*\"?([0-9,]+(?:\\.[0-9]+)?)\"?"),
                 firstRegex(html, "\"last\"\\s*:\\s*\"?([0-9,]+(?:\\.[0-9]+)?)\"?")
         );
-        return price <= 0 ? null : new StockQuote(stockId, cleanText(name), price, 0, 0, 0, 0, "web:msn");
+        return price <= 0 ? null : new StockQuote(stockId, cleanStockName(name), price, 0, 0, 0, 0, "web:msn");
     }
 
     private StockQuote fetchWantGooQuote(String stockId) {
@@ -227,10 +235,68 @@ public class WebStockScraperClient implements StockDataClient {
         double price = firstPositivePrice(
                 firstRegex(html, "\"closePrice\"\\s*:\\s*\"?([0-9,]+(?:\\.[0-9]+)?)\"?"),
                 firstRegex(html, "\"lastPrice\"\\s*:\\s*\"?([0-9,]+(?:\\.[0-9]+)?)\"?"),
-                firstRegex(html, "\"price\"\\s*:\\s*\"?([0-9,]+(?:\\.[0-9]+)?)\"?"),
-                firstRegex(html, "成交價[^0-9]{0,80}([0-9,]+(?:\\.[0-9]+)?)")
+                firstRegex(html, "\"latestPrice\"\\s*:\\s*\"?([0-9,]+(?:\\.[0-9]+)?)\"?")
         );
-        return price <= 0 ? null : new StockQuote(stockId, cleanText(name), price, 0, 0, 0, 0, "web:wantgoo");
+        return price <= 0 ? null : new StockQuote(stockId, cleanStockName(name), price, 0, 0, 0, 0, "web:wantgoo");
+    }
+
+    private List<StockData> fetchYahooChartHistory(String stockId, LocalDate fromDate, LocalDate toDate) {
+        if (stockId == null || stockId.isBlank() || yahooChartTemplate.isBlank()) {
+            return List.of();
+        }
+
+        LocalDate start = fromDate == null ? LocalDate.now().minusYears(1) : fromDate;
+        LocalDate end = toDate == null ? LocalDate.now() : toDate;
+        long period1 = start.atStartOfDay(ZoneId.systemDefault()).toEpochSecond();
+        long period2 = end.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toEpochSecond();
+        String symbol = stockId.replaceAll("\\.(TW|TWO|TPE)$", "");
+        String url = yahooChartTemplate.formatted(URLEncoder.encode(symbol, StandardCharsets.UTF_8), period1, period2);
+        String json = get(url);
+        if (json.isBlank() || json.contains("\"error\":{\"code\"")) {
+            return List.of();
+        }
+
+        List<String> timestamps = csvArrayAfter(json, "\"timestamp\"");
+        String quoteObject = firstRegex(json, "\"quote\"\\s*:\\s*\\[\\s*\\{(.*?)\\}\\s*\\]");
+        List<String> opens = csvArrayAfter(quoteObject, "\"open\"");
+        List<String> highs = csvArrayAfter(quoteObject, "\"high\"");
+        List<String> lows = csvArrayAfter(quoteObject, "\"low\"");
+        List<String> closes = csvArrayAfter(quoteObject, "\"close\"");
+        List<String> volumes = csvArrayAfter(quoteObject, "\"volume\"");
+
+        int rows = minSize(timestamps, opens, highs, lows, closes, volumes);
+        List<StockData> result = new ArrayList<>();
+        double previousClose = 0;
+        for (int i = 0; i < rows; i++) {
+            if (isNullPrice(opens.get(i)) || isNullPrice(highs.get(i)) || isNullPrice(lows.get(i)) || isNullPrice(closes.get(i))) {
+                continue;
+            }
+
+            LocalDate date = Instant.ofEpochSecond(Long.parseLong(timestamps.get(i).trim()))
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDate();
+            if (date.isBefore(start) || date.isAfter(end)) {
+                continue;
+            }
+
+            double close = JsonText.parseDouble(closes.get(i));
+            double change = previousClose <= 0 ? 0 : close - previousClose;
+            previousClose = close;
+            result.add(new StockData(
+                    symbol,
+                    "",
+                    date.toString(),
+                    opens.get(i),
+                    highs.get(i),
+                    lows.get(i),
+                    closes.get(i),
+                    volumes.get(i),
+                    "0",
+                    "0",
+                    String.valueOf(change)
+            ));
+        }
+        return result;
     }
 
     private String get(String url) {
@@ -245,8 +311,13 @@ public class WebStockScraperClient implements StockDataClient {
 
         try {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() == 404) {
+                return "";
+            }
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new RuntimeException("Web stock HTTP " + response.statusCode() + ": " + response.body());
+                throw new RuntimeException("Web stock HTTP " + response.statusCode()
+                        + " at " + request.uri()
+                        + ": " + summarizeResponseBody(response.body()));
             }
             return response.body();
         } catch (IOException e) {
@@ -255,6 +326,21 @@ public class WebStockScraperClient implements StockDataClient {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Web stock page fetch interrupted", e);
         }
+    }
+
+    private boolean isCnbcNotFoundPage(String html) {
+        String lower = html == null ? "" : html.toLowerCase();
+        return lower.contains("404|not-found")
+                || lower.contains("do not delete - 404 page")
+                || lower.contains("page you were looking for cannot be found");
+    }
+
+    private String summarizeResponseBody(String body) {
+        String cleaned = cleanText(body);
+        if (cleaned.isBlank()) {
+            return "empty response body";
+        }
+        return cleaned.length() > 160 ? cleaned.substring(0, 160) + "..." : cleaned;
     }
 
     private String formatTemplate(String template, String stockId) {
@@ -281,6 +367,35 @@ public class WebStockScraperClient implements StockDataClient {
         }
         String reversePattern = "<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+(?:property|name)=[\"']" + property + "[\"'][^>]*>";
         return firstRegex(html, reversePattern);
+    }
+
+    private List<String> csvArrayAfter(String text, String key) {
+        if (text == null || text.isBlank()) {
+            return List.of();
+        }
+        Pattern pattern = Pattern.compile(Pattern.quote(key) + "\\s*:\\s*\\[(.*?)\\]", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+        Matcher matcher = pattern.matcher(text);
+        if (!matcher.find()) {
+            return List.of();
+        }
+        List<String> values = new ArrayList<>();
+        for (String value : matcher.group(1).split(",")) {
+            values.add(value.trim());
+        }
+        return values;
+    }
+
+    @SafeVarargs
+    private final int minSize(List<String>... lists) {
+        int min = Integer.MAX_VALUE;
+        for (List<String> list : lists) {
+            min = Math.min(min, list.size());
+        }
+        return min == Integer.MAX_VALUE ? 0 : min;
+    }
+
+    private boolean isNullPrice(String value) {
+        return value == null || value.isBlank() || "null".equalsIgnoreCase(value.trim());
     }
 
     private String firstRegex(String text, String patternText) {
@@ -314,6 +429,33 @@ public class WebStockScraperClient implements StockDataClient {
                 .trim();
     }
 
+    private String cleanStockName(String value) {
+        String cleaned = cleanText(value);
+        if (cleaned.isBlank() || isMarketingTitle(cleaned)) {
+            return ""; // 名稱不可靠時留空，避免把網頁宣傳標題誤當股票名稱。
+        }
+
+        String withoutSuffix = cleaned
+                .replaceAll("\\s*[-|｜].*$", "")
+                .replaceAll("\\s*股價.*$", "")
+                .replaceAll("\\s*Stock Price.*$", "")
+                .replaceAll("\\s*Quote.*$", "")
+                .trim();
+        return withoutSuffix.length() > 40 ? "" : withoutSuffix;
+    }
+
+    private boolean isMarketingTitle(String value) {
+        String lower = value.toLowerCase();
+        return lower.contains("check out")
+                || lower.contains("latest news")
+                || lower.contains("stock quote")
+                || lower.contains("cnbc")
+                || lower.contains("finance")
+                || lower.contains("yahoo")
+                || lower.contains("wantgoo")
+                || lower.contains("google");
+    }
+
     private String htmlDecode(String value) {
         if (value == null) {
             return "";
@@ -324,6 +466,7 @@ public class WebStockScraperClient implements StockDataClient {
                 .replace("&gt;", ">")
                 .replace("&quot;", "\"")
                 .replace("&#39;", "'")
+                .replace("&#x27;", "'")
                 .replace("&nbsp;", " ");
     }
 

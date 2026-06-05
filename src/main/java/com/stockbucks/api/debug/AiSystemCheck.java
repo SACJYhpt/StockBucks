@@ -1,15 +1,16 @@
 package com.stockbucks.api.debug;
 
 import com.stockbucks.api.AIHub;
+import com.stockbucks.api.ai.ApiModelClient;
+import com.stockbucks.api.stock.StockHistoryAttempt;
 import com.stockbucks.api.stock.StockQuote;
 
+import java.time.LocalDate;
 import java.util.Map;
 
 /**
- * AI 模組的獨立檢查入口。
- *
- * 這個類別只放在 ai/debug 內，不接 JavaFX，也不改同學的檔案。
- * 預設只印設定狀態；如果要真的抓股票報價，執行時加上：quote 2330。
+ * API 狀態快速檢查工具。
+ * 可用參數：quote 2330、history 2330、ai ollama。
  */
 public final class AiSystemCheck {
     private AiSystemCheck() {
@@ -38,12 +39,25 @@ public final class AiSystemCheck {
             System.out.println(entry.getKey() + " = " + entry.getValue());
         }
 
-        if (args.length >= 2 && "quote".equalsIgnoreCase(args[0])) {
+        if (args.length >= 2 && "ai".equalsIgnoreCase(args[0])) {
+            printAi(args[1]);
+        } else if (args.length >= 2 && "quote".equalsIgnoreCase(args[0])) {
             printQuote(hub, args[1]);
+        } else if (args.length >= 2 && "history".equalsIgnoreCase(args[0])) {
+            printHistory(hub, args[1]);
         } else {
-            printTitle("報價測試");
-            System.out.println("未執行報價抓取。若要測試，請執行參數：quote 2330");
+            printTitle("測試方式");
+            System.out.println("測即時報價：quote 2330");
+            System.out.println("測歷史來源：history 2330");
+            System.out.println("測 AI 來源：ai ollama");
         }
+    }
+
+    private static void printAi(String provider) {
+        printTitle("AI 測試：" + provider);
+        ApiModelClient client = new ApiModelClient(provider);
+        System.out.println(client.getConfigurationStatus());
+        System.out.println(client.ask("請只回覆 OK，用來測試 API 是否可用。"));
     }
 
     private static void printQuote(AIHub hub, String stockId) {
@@ -63,6 +77,27 @@ public final class AiSystemCheck {
         String reason = hub.getLastStockFallbackReason();
         if (reason != null && !reason.isBlank()) {
             System.out.println("前面來源略過/失敗原因：" + reason);
+        }
+    }
+
+    private static void printHistory(AIHub hub, String stockId) {
+        printTitle("歷史資料來源測試：" + stockId);
+        LocalDate toDate = LocalDate.now();
+        LocalDate fromDate = toDate.minusDays(10);
+        for (StockHistoryAttempt attempt : hub.fetchStockHistoryAttempts(stockId, fromDate, toDate)) {
+            System.out.println(attempt.getProviderName()
+                    + "：" + attempt.getStatus()
+                    + " | 筆數 " + attempt.getRowCount()
+                    + " | 日期 " + attempt.getFirstDate() + " ~ " + attempt.getLastDate()
+                    + " | " + attempt.getMessage());
+        }
+
+        System.out.println();
+        System.out.println("合併後筆數：" + hub.fetchStockHistory(stockId, fromDate, toDate).size());
+        System.out.println("合併來源：" + hub.getLastStockProviderUsed());
+        String reason = hub.getLastStockFallbackReason();
+        if (reason != null && !reason.isBlank()) {
+            System.out.println("未使用來源狀態：" + reason);
         }
     }
 

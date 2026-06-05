@@ -8,6 +8,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -44,7 +46,7 @@ public class ApiModelClient implements ModelClient {
 
     @Override
     public String ask(String prompt) {
-        String safePrompt = prompt == null ? "" : prompt;
+        String safePrompt = enforceTraditionalChinese(prompt == null ? "" : prompt);
         // 不同供應商的 request body 格式不同，因此在這裡分流。
         return switch (provider) {
             case "anthropic", "claude" -> askAnthropic(safePrompt);
@@ -92,6 +94,12 @@ public class ApiModelClient implements ModelClient {
             return "AI provider: " + provider + " | model: " + model + " | ready";
         }
         return "AI provider: " + provider + " | missing: " + missing;
+    }
+
+    public String getShortConfigurationStatus() {
+        String missing = getMissingApiKeyName();
+        String state = missing.isBlank() ? "可用" : "缺 " + missing;
+        return provider + "：" + state + " | " + model; // DEBUG UI 用一行顯示每個 AI 方案。
     }
 
     private String askOpenAiResponses(String prompt) {
@@ -200,6 +208,8 @@ public class ApiModelClient implements ModelClient {
     }
 
     private String askOllama(String prompt) {
+        ensureOllamaServerRunning(); // 本機服務未啟動時，嘗試用專案旁邊的 Ollama 工具自動開起來。
+
         String body = """
                 {
                   "model": %s,
@@ -213,6 +223,60 @@ public class ApiModelClient implements ModelClient {
                 .build();
 
         return sendAndExtract(request, json -> firstJsonString(json, "response"));
+    }
+
+    private void ensureOllamaServerRunning() {
+        if (!provider.equals("ollama") && !provider.equals("local")) {
+            return;
+        }
+        if (isOllamaServerAlive()) {
+            return;
+        }
+
+        Path ollamaExe = resolveOllamaExecutable();
+        if (!Files.isRegularFile(ollamaExe)) {
+            return;
+        }
+
+        try {
+            ProcessBuilder builder = new ProcessBuilder(ollamaExe.toString(), "serve");
+            Path modelsPath = resolveOllamaModelsPath();
+            if (Files.isDirectory(modelsPath)) {
+                builder.environment().put("OLLAMA_MODELS", modelsPath.toString());
+            }
+            builder.redirectError(ProcessBuilder.Redirect.DISCARD);
+            builder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+            builder.start();
+
+            long deadline = System.currentTimeMillis() + 8000;
+            while (System.currentTimeMillis() < deadline) {
+                if (isOllamaServerAlive()) {
+                    return;
+                }
+                Thread.sleep(250);
+            }
+        } catch (IOException ignored) {
+            // 啟動失敗時保留原本 HTTP 檢查結果，讓 UI 顯示可讀錯誤。
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private boolean isOllamaServerAlive() {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + "/api/tags"))
+                    .timeout(Duration.ofSeconds(2))
+                    .GET()
+                    .build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            return response.statusCode() >= 200 && response.statusCode() < 300;
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return false;
+        }
     }
 
     private HttpRequest.Builder requestBuilder(String uri) {
@@ -229,12 +293,12 @@ public class ApiModelClient implements ModelClient {
         try {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                return "[AI API error] HTTP " + response.statusCode() + "\n" + response.body();
+                return "[AI API error] HTTP " + response.statusCode() + " " + summarizeResponseBody(response.body());
             }
             String text = extractor.extract(response.body());
-            return text == null || text.isBlank() ? response.body() : text;
+            return text == null || text.isBlank() ? summarizeResponseBody(response.body()) : text;
         } catch (IOException e) {
-            return "[AI API request failed] " + e.getMessage();
+            return "[AI API request failed] " + readableIOException(request, e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return "[AI API request interrupted] " + e.getMessage();
@@ -259,11 +323,18 @@ public class ApiModelClient implements ModelClient {
 
     private String resolveBaseUrl(String provider) {
         // 預設值可直接使用；也可以用 AI_BASE_URL 覆蓋。
+        if (provider.equals("ollama") || provider.equals("local")) {
+            return trimTrailingSlash(EnvironmentConfig.first(
+                    "http://localhost:11434",
+                    "OLLAMA_BASE_URL",
+                    "STOCKBUCKS_OLLAMA_BASE_URL"
+            ));
+        }
+
         String defaultUrl = switch (provider) {
             case "anthropic", "claude" -> "https://api.anthropic.com/v1";
             case "gemini", "google" -> "https://generativelanguage.googleapis.com/v1beta";
             case "openrouter" -> "https://openrouter.ai/api/v1";
-            case "ollama", "local" -> "http://localhost:11434";
             case "openai-compatible", "compatible", "chat-completions" -> "http://localhost:8000/v1";
             default -> "https://api.openai.com/v1";
         };
@@ -272,11 +343,18 @@ public class ApiModelClient implements ModelClient {
 
     private String resolveModel(String provider) {
         // 每個供應商提供一個可用預設模型；正式部署可由 AI_MODEL 覆蓋。
+        if (provider.equals("ollama") || provider.equals("local")) {
+            return EnvironmentConfig.first(
+                    "stockbucks-traditional-zh:latest",
+                    "OLLAMA_MODEL",
+                    "STOCKBUCKS_OLLAMA_MODEL"
+            );
+        }
+
         String defaultModel = switch (provider) {
             case "anthropic", "claude" -> "claude-sonnet-4-5-20250929";
             case "gemini", "google" -> "gemini-2.5-flash";
             case "openrouter" -> "anthropic/claude-sonnet-4.5";
-            case "ollama", "local" -> "llama3.2";
             case "openai-compatible", "compatible", "chat-completions" -> "local-model";
             default -> "gpt-4.1-mini";
         };
@@ -286,6 +364,18 @@ public class ApiModelClient implements ModelClient {
     private String missingKey(String keyName) {
         return "[AI config] Missing " + keyName
                 + ". Set it in the OS environment, project .env, stockbucks.env, or ~/.stockbucks/.env.";
+    }
+
+    private String enforceTraditionalChinese(String prompt) {
+        return """
+                請遵守以下輸出規則：
+                1. 一律使用繁體中文，並盡量使用台灣常見用語。
+                2. 不要使用簡體字。
+                3. 英文專有名詞、API 名稱、股票代號與程式碼可以保留原文。
+
+                使用者內容：
+                %s
+                """.formatted(prompt);
     }
 
     private String extractOpenAiText(String json) {
@@ -329,6 +419,48 @@ public class ApiModelClient implements ModelClient {
 
     private String trimTrailingSlash(String value) {
         return value == null ? "" : value.replaceAll("/+$", "");
+    }
+
+    private Path resolveOllamaExecutable() {
+        String configured = EnvironmentConfig.first("", "OLLAMA_EXE_PATH", "STOCKBUCKS_OLLAMA_EXE_PATH");
+        if (!configured.isBlank()) {
+            return Path.of(configured);
+        }
+        return Path.of("..", "ai", "tools", "ollama", "ollama.exe").toAbsolutePath().normalize();
+    }
+
+    private Path resolveOllamaModelsPath() {
+        String configured = EnvironmentConfig.first("", "OLLAMA_MODELS", "STOCKBUCKS_OLLAMA_MODELS");
+        if (!configured.isBlank()) {
+            return Path.of(configured);
+        }
+        return Path.of("..", "ai", "data", "ollama_models").toAbsolutePath().normalize();
+    }
+
+    private String readableIOException(HttpRequest request, IOException e) {
+        String message = e.getMessage();
+        if (message != null && !message.isBlank()) {
+            return message;
+        }
+
+        String uri = request == null || request.uri() == null ? "" : request.uri().toString();
+        if (uri.contains("localhost") || uri.contains("127.0.0.1")) {
+            return e.getClass().getSimpleName() + ": 無法連線到 " + uri + "，請確認本機 AI 服務是否已啟動。";
+        }
+        return e.getClass().getSimpleName();
+    }
+
+    private String summarizeResponseBody(String body) {
+        if (body == null || body.isBlank()) {
+            return "empty response body";
+        }
+        String cleaned = body
+                .replaceAll("(?is)<script.*?</script>", " ")
+                .replaceAll("(?is)<style.*?</style>", " ")
+                .replaceAll("<[^>]+>", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        return cleaned.length() > 180 ? cleaned.substring(0, 180) + "..." : cleaned;
     }
 
     private interface TextExtractor {

@@ -136,7 +136,7 @@ public class TwseHistoricalDataClient implements StockDataClient {
             String turnover = firstNonBlank(extractJsonValue(objectText, "TradeValue"), extractJsonValue(objectText, "成交金額"));
             String change = firstNonBlank(extractJsonValue(objectText, "Change"), extractJsonValue(objectText, "漲跌價差"));
 
-            if (isListedCommonStockCode(stockId) && hasPrice(open, high, low, close)) {
+            if (isListedSecurityCode(stockId) && hasPrice(open, high, low, close)) {
                 result.add(new StockData(stockId, stockName, LocalDate.now().format(STOCK_DATA_DATE),
                         open, high, low, close, volume, turnover, "0", change));
             }
@@ -150,7 +150,7 @@ public class TwseHistoricalDataClient implements StockDataClient {
         for (String objectText : extractJsonObjects(json)) {
             String code = firstNonBlank(extractJsonValue(objectText, "Code"), extractJsonValue(objectText, "證券代號"));
             String name = firstNonBlank(extractJsonValue(objectText, "Name"), extractJsonValue(objectText, "證券名稱"));
-            if (isListedCommonStockCode(code)) {
+            if (isListedSecurityCode(code)) {
                 result.add(new StockProfile(code, name, "TWSE"));
             }
         }
@@ -180,7 +180,7 @@ public class TwseHistoricalDataClient implements StockDataClient {
         try {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new RuntimeException("TWSE HTTP " + response.statusCode() + ": " + response.body());
+                throw new RuntimeException("TWSE HTTP " + response.statusCode() + ": " + summarizeResponseBody(response.body()));
             }
             return response.body();
         } catch (IOException e) {
@@ -189,6 +189,19 @@ public class TwseHistoricalDataClient implements StockDataClient {
             Thread.currentThread().interrupt();
             throw new RuntimeException("TWSE fetch interrupted", e);
         }
+    }
+
+    private String summarizeResponseBody(String body) {
+        if (body == null || body.isBlank()) {
+            return "empty response body";
+        }
+        String cleaned = body
+                .replaceAll("(?is)<script.*?</script>", " ")
+                .replaceAll("(?is)<style.*?</style>", " ")
+                .replaceAll("<[^>]+>", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        return cleaned.length() > 160 ? cleaned.substring(0, 160) + "..." : cleaned;
     }
 
     private List<StockData> parseStockDayResponse(String stockId, String json) {
@@ -229,8 +242,9 @@ public class TwseHistoricalDataClient implements StockDataClient {
                 && !cleanNumber(close).isBlank();
     }
 
-    private boolean isListedCommonStockCode(String code) {
-        return code != null && code.matches("[1-9][0-9]{3}");
+    private boolean isListedSecurityCode(String code) {
+        // TWSE 有 2330 這類普通股票，也有 0050、00881 這類 ETF；測試時都應列入。
+        return code != null && code.matches("[0-9A-Z]{4,6}");
     }
 
     private String extractJsonValue(String objectText, String fieldName) {

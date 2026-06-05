@@ -53,11 +53,25 @@ public class LocalFallbackStockDataClient implements StockDataClient {
         if (data.isEmpty()) {
             return null;
         }
-        return StockQuote.fromStockData(data.get(data.size() - 1), getProviderName());
+        StockData latest = data.get(data.size() - 1);
+        return new StockQuote(
+                normalizeStockId(stockId),
+                "TSMC fallback sample",
+                latest.getClose(),
+                latest.getOpen(),
+                latest.getHigh(),
+                latest.getLow(),
+                latest.getVolume(),
+                getProviderName()
+        );
     }
 
     @Override
     public List<StockData> fetchDailyHistory(String stockId, LocalDate fromDate, LocalDate toDate) {
+        if (!isSupportedLocalSymbol(stockId)) {
+            return List.of(); // 避免 0050、0052 等代號誤用 TestDataTSMC.csv 的台積電測試資料。
+        }
+
         List<StockData> data = new ArrayList<>();
         // CsvLoading 目前固定讀 data/TestDataTSMC.csv，這裡不改同學既有類別。
         new CsvLoading().streamStockData(csvName, data::add);
@@ -91,5 +105,16 @@ public class LocalFallbackStockDataClient implements StockDataClient {
         boolean afterStart = fromDate == null || fromDate.equals(LocalDate.MIN) || !date.isBefore(fromDate);
         boolean beforeEnd = toDate == null || toDate.equals(LocalDate.MAX) || !date.isAfter(toDate);
         return afterStart && beforeEnd;
+    }
+
+    private boolean isSupportedLocalSymbol(String stockId) {
+        String normalized = normalizeStockId(stockId);
+        return normalized.isBlank()
+                || normalized.equals("2330")
+                || normalized.equalsIgnoreCase(csvName);
+    }
+
+    private String normalizeStockId(String stockId) {
+        return stockId == null ? "" : stockId.trim();
     }
 }

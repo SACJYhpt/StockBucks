@@ -10,7 +10,9 @@ import com.stockbucks.api.stock.MarketDataUpdateResult;
 import com.stockbucks.api.stock.BrokerAccountSnapshot;
 import com.stockbucks.api.stock.BrokerPosition;
 import com.stockbucks.api.stock.IntradayBar;
+import com.stockbucks.api.stock.StockHistoryAttempt;
 import com.stockbucks.api.stock.StockQuote;
+import com.stockbucks.api.stock.StockQuoteAttempt;
 import com.stockbucks.api.stock.StockProfile;
 import com.stockbucks.api.mode.MarketMode;
 
@@ -26,6 +28,15 @@ import java.util.function.Consumer;
  * 券商 API、TWSE API 或網頁爬蟲。
  */
 public class AIHub {
+    private static final List<String> AI_PROVIDER_FALLBACK_CHAIN = List.of(
+            "gemini",
+            "anthropic",
+            "openrouter",
+            "ollama",
+            "openai-compatible",
+            "openai"
+    ); // AI 失敗時的備援順序，避開單一供應商額度用完就整個不能用。
+
     private final ModelClient aiClient; // 處理 AI 文字請求。
     private final MarketDataService stockApi; // 處理券商/API/爬蟲/本地 CSV 股票資料。
     private MarketMode currentMode = MarketMode.HISTORY; // 保留給舊存檔與舊 UI 相容。
@@ -44,7 +55,41 @@ public class AIHub {
     }
 
     public String askAi(String prompt) {
-        return aiClient.ask(prompt);
+        String firstAnswer = aiClient.ask(prompt);
+        if (!shouldFallbackAi(firstAnswer) || !(aiClient instanceof ApiModelClient currentClient)) {
+            return firstAnswer;
+        }
+
+        StringBuilder attempts = new StringBuilder();
+        attempts.append("目前 AI 來源 ")
+                .append(currentClient.getProvider())
+                .append(" 無法使用：")
+                .append(summarizeAiFailure(firstAnswer))
+                .append('\n');
+
+        for (String provider : AI_PROVIDER_FALLBACK_CHAIN) {
+            if (provider.equals(currentClient.getProvider())) {
+                continue;
+            }
+
+            ApiModelClient fallbackClient = new ApiModelClient(provider);
+            String missingKey = fallbackClient.getMissingApiKeyName();
+            if (!missingKey.isBlank()) {
+                attempts.append(provider).append("：缺 ").append(missingKey).append('\n');
+                continue;
+            }
+
+            String fallbackAnswer = fallbackClient.ask(prompt);
+            if (!shouldFallbackAi(fallbackAnswer)) {
+                return "[AI fallback] 已改用 " + provider + "\n\n" + fallbackAnswer;
+            }
+            attempts.append(provider)
+                    .append("：")
+                    .append(summarizeAiFailure(fallbackAnswer))
+                    .append('\n');
+        }
+
+        return "[AI fallback] 所有可嘗試的 AI 來源都無法完成。\n" + attempts;
     }
 
     public boolean isAiReady() {
@@ -65,12 +110,31 @@ public class AIHub {
         return "AI provider: custom";
     }
 
+    public List<String> getAllAiProviderStatusLines() {
+        return List.of(
+                new ApiModelClient("gemini").getShortConfigurationStatus(),
+                new ApiModelClient("anthropic").getShortConfigurationStatus(),
+                new ApiModelClient("openrouter").getShortConfigurationStatus(),
+                new ApiModelClient("ollama").getShortConfigurationStatus(),
+                new ApiModelClient("openai-compatible").getShortConfigurationStatus(),
+                new ApiModelClient("openai").getShortConfigurationStatus()
+        );
+    }
+
     public List<StockData> fetchStockHistory(String stockId, LocalDate fromDate, LocalDate toDate) {
         return stockApi.fetchDailyHistory(stockId, fromDate, toDate);
     }
 
+    public List<StockHistoryAttempt> fetchStockHistoryAttempts(String stockId, LocalDate fromDate, LocalDate toDate) {
+        return stockApi.fetchDailyHistoryAttempts(stockId, fromDate, toDate); // 給同學/debug 查每個歷史來源的資料量與狀態。
+    }
+
     public StockQuote fetchStockQuote(String stockId) {
-        return stockApi.fetchQuote(stockId); // 依序嘗試：券商 -> Fugle -> TWSE -> 網頁 -> FinMind -> 本地。
+        return stockApi.fetchQuote(stockId); // 依序嘗試：券商 -> Fugle -> 網頁 -> TWSE -> FinMind -> 本地。
+    }
+
+    public List<StockQuoteAttempt> fetchStockQuoteAttempts(String stockId) {
+        return stockApi.fetchQuoteAttempts(stockId); // DEBUG 用：列出每個來源的成功、缺 key、無資料或失敗狀態。
     }
 
     public Map<String, String> getStockProviderStatus() {
@@ -230,5 +294,31 @@ public class AIHub {
                     .append('\n');
         }
         return prompt.toString();
+    }
+
+    private boolean shouldFallbackAi(String answer) {
+        if (answer == null || answer.isBlank()) {
+            return true;
+        }
+        return answer.contains("[AI config]")
+                || answer.contains("[AI API error]")
+                || answer.contains("[AI API request failed]")
+                || answer.contains("[AI API request interrupted]")
+                || answer.contains("insufficient_quota")
+                || answer.contains("HTTP 429");
+    }
+
+    private String summarizeAiFailure(String answer) {
+        if (answer == null || answer.isBlank()) {
+            return "空白回覆";
+        }
+        if (answer.contains("insufficient_quota")) {
+            return "額度不足或付款方案未啟用";
+        }
+        if (answer.contains("HTTP 429")) {
+            return "請求過多或額度限制";
+        }
+        String firstLine = answer.lines().findFirst().orElse(answer).trim();
+        return firstLine.length() > 90 ? firstLine.substring(0, 90) + "..." : firstLine;
     }
 }
