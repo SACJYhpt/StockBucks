@@ -7,9 +7,9 @@ package com.stockbucks.api.mode;
  * 所以保留它以維持相容。
  */
 public enum MarketMode {
-    REALTIME("Realtime API"),
-    HISTORY("Historical API"),
-    AI_RANDOM("API sample");
+    REALTIME("真實即時模式"),
+    HISTORY("歷史回測模式"),
+    AI_RANDOM("AI模擬盤模式");
 
     private final String displayName;
 
