@@ -36,7 +36,10 @@ import java.util.List;
 
 public class MainApp extends Application {
     private SaveData initialSaveData = null;
+    private String currentSelectedStockId = "2330";
     private User user;
+    private Timeline marketSearchDebounce = null;
+    private Timeline tradeSearchDebounce = null;
     private TradingEngine tradingEngine;
     private CsvLoading csvLoader = new CsvLoading();
     private PriceSimulator simulator = new PriceSimulator();
@@ -88,6 +91,7 @@ public class MainApp extends Application {
     private java.util.LinkedHashMap<String, ObservableList<String>> watchlistData = new java.util.LinkedHashMap<>();
     private TabPane marketTabPane = new TabPane();
     private TextField marketSearchField = new TextField();
+    private TextField stockSearchField;
 
     // 定義選單 Enum
     private enum MenuType {
@@ -137,13 +141,15 @@ public class MainApp extends Application {
         //如果是全新開局，或是舊存檔完全沒有自選股資料，才初始化預設的「全部最愛」
         if (!watchlistData.containsKey("全部最愛")) {
             watchlistData.put("全部最愛", FXCollections.observableArrayList());
-            watchlistData.get("全部最愛").addAll("元大台灣50", "富邦科技 0052", "國泰台灣科技", "台積電 2330");
+            watchlistData.get("全部最愛").addAll("0050", "2330");
         }
 
-        List<String> globalCanlendar = csvLoader.loadGlobalCanlendar("TestDataTSMC");
-        this.tradingEngine = new TradingEngine(globalCanlendar);
+        List<String> globalCalendar = csvLoader.loadGlobalCanlendar("0050");
+        this.tradingEngine = new TradingEngine(globalCalendar);
 
-        csvLoader.streamStockData("TestDataTSMC", data -> historyData.add(data));
+        if (this.historyData != null) {
+            this.historyData.clear(); // 保持乾淨，開局不盲目塞入任何個股歷史
+        }
         
         if (this.user.getTradeHistory() != null) {
             List<TradeRecord> pastRecords = this.user.getTradeHistory();
@@ -173,7 +179,7 @@ public class MainApp extends Application {
         // 預設進入第一個畫面
         switchView(MenuType.MARKET);
 
-        stage.setScene(new Scene(mainLayout, 1300, 850));
+        stage.setScene(new Scene(mainLayout, 900, 500));
         stage.setTitle("StockBucks 模擬交易系統");
         stage.show();
     }
@@ -182,6 +188,12 @@ public class MainApp extends Application {
      * 初始化四大主要功能畫面
      */
     private void initAllViews() {
+        if (this.marketMode == com.stockbucks.api.mode.MarketMode.REALTIME) {
+            aiHub.setMarketMode(com.stockbucks.api.mode.MarketMode.REALTIME);
+        } else {
+            aiHub.setMarketMode(com.stockbucks.api.mode.MarketMode.HISTORY);
+        }
+
         // 【1. 市場行情】
         marketView = new StackPane();
         VBox marketLayout = new VBox(15);
@@ -194,6 +206,79 @@ public class MainApp extends Application {
         marketSearchField.setPromptText("🔍 輸入公司名稱或代碼... (例如: 台積電 或 2330)");
         marketSearchField.setPrefWidth(400);
         marketSearchField.getStyleClass().add(Styles.ROUNDED);
+
+        //建立搜尋推薦選單
+        ContextMenu searchPopup = new ContextMenu();
+        searchPopup.setStyle("-fx-background-color: #2d333b; -fx-border-color: #444;");
+
+        //監聽打字事件，動態匹配全市場股票
+        marketSearchField.textProperty().addListener((observable, oldValue, newValue) -> {
+            if (marketSearchDebounce != null) {
+                marketSearchDebounce.stop();
+            }
+
+            marketSearchDebounce = new Timeline(new KeyFrame(Duration.millis(300), e -> {
+                String query = newValue.trim().toLowerCase();
+                if (query.isEmpty()) {
+                    searchPopup.hide();
+                    return;
+                }
+
+                searchPopup.getItems().clear();
+                List<com.stockbucks.api.stock.StockProfile> allStocks = aiHub.fetchAllListedStocks();
+                
+                if (allStocks != null) {
+                    int limit = 0;
+                    for (com.stockbucks.api.stock.StockProfile p : allStocks) {
+                        String id = p.getStockId();
+                        
+                        //如果 getStockName() 依然報錯，請記得在這一行改呼叫 p.getCompanyName()
+                        String name = p.getStockName(); 
+                        
+                        if (id == null || name == null) continue;
+
+                        // 支援同時用「代號」或「中文名稱」進行模糊搜尋
+                        if (id.toLowerCase().contains(query) || name.toLowerCase().contains(query)) {
+                            MenuItem item = new MenuItem(id + "  " + name);
+                            item.setStyle("-fx-text-fill: #adbac7; -fx-font-size: 14px;");
+                            
+                            // 當選中了某一筆推薦（例如選中 2330 台積電）
+                            item.setOnAction(evt -> {
+                                //核心修正：將輸入框自動修正成「純代號」，確保加入最愛後的字卡永遠讀得到資料！
+                                marketSearchField.setText(id); 
+                                searchPopup.hide();
+                                
+                                // 連動主介面的看盤跑線邏輯
+                                if (this.stockSearchField != null) {
+                                    this.stockSearchField.setText(id);
+                                    this.currentSelectedStockId = id;
+                                    handleStartSimulation();
+                                }
+                            });
+                            
+                            searchPopup.getItems().add(item);
+                            limit++;
+                            if (limit >= 5) break; // 最多顯示 5 筆
+                        }
+                    }
+                }
+
+                // 展開推薦選單
+                if (!searchPopup.getItems().isEmpty()) {
+                    if (!searchPopup.isShowing()) {
+                        searchPopup.show(marketSearchField, javafx.geometry.Side.BOTTOM, 0, 0);
+                    }
+                } else {
+                    searchPopup.hide();
+                }
+            }));
+            marketSearchDebounce.play();
+        });
+
+        // 當輸入框失去焦點，自動隱藏選單
+        marketSearchField.focusedProperty().addListener((obs, oldVal, newVal) -> {
+            if (!newVal) searchPopup.hide();
+        });
 
         Button addToFavoriteBtn = new Button("⭐ 加入最愛");
         addToFavoriteBtn.getStyleClass().add(Styles.ACCENT);
@@ -251,10 +336,55 @@ public class MainApp extends Application {
         topSearchBar.setPadding(new Insets(0, 0, 15, 0));
 
         // 搜尋輸入框
-        TextField stockSearchField = new TextField();
+        if (this.stockSearchField == null) {
+            this.stockSearchField = new TextField();
+        }
         stockSearchField.setPromptText("🔍 搜尋股票、名稱或代碼...");
         stockSearchField.setPrefWidth(400);
         stockSearchField.getStyleClass().add(Styles.ROUNDED); // 讓邊角變圓
+
+        ContextMenu tradeSearchPopup = new ContextMenu();
+        tradeSearchPopup.setStyle("-fx-background-color: #2d333b; -fx-border-color: #444;");
+        stockSearchField.textProperty().addListener((observable, oldValue, newValue) -> {
+            if (tradeSearchDebounce != null) {
+                tradeSearchDebounce.stop();
+            }
+
+            tradeSearchDebounce = new Timeline(new KeyFrame(Duration.millis(300), e -> {
+                String query = newValue.trim().toLowerCase();
+                if (query.isEmpty()) { tradeSearchPopup.hide(); return; }
+                tradeSearchPopup.getItems().clear();
+                List<com.stockbucks.api.stock.StockProfile> allStocks = aiHub.fetchAllListedStocks();
+                if (allStocks != null) {
+                    int limit = 0;
+                    for (com.stockbucks.api.stock.StockProfile p : allStocks) {
+                        String id = p.getStockId();
+                        String name = p.getStockName(); // 若報錯請改 getCompanyName()
+                        if (id == null || name == null) continue;
+                        if (id.toLowerCase().contains(query) || name.toLowerCase().contains(query)) {
+                            MenuItem item = new MenuItem(id + "  " + name);
+                            item.setStyle("-fx-text-fill: #adbac7; -fx-font-size: 14px;");
+                            item.setOnAction(evt -> {
+                                stockSearchField.setText(id); // 自動導正為純代號
+                                if (marketSearchField != null) marketSearchField.setText(id); // 同步給自選頁
+                                tradeSearchPopup.hide();
+                                this.currentSelectedStockId = id;
+                                handleStartSimulation(); // 導正後立刻連動更換線圖與啟動模擬！
+                            });
+                            tradeSearchPopup.getItems().add(item);
+                            if (++limit >= 5) break;
+                        }
+                    }
+                }
+                if (!tradeSearchPopup.getItems().isEmpty() && !tradeSearchPopup.isShowing()) {
+                    tradeSearchPopup.show(stockSearchField, javafx.geometry.Side.BOTTOM, 0, 0);
+                } else if (tradeSearchPopup.getItems().isEmpty()) {
+                    tradeSearchPopup.hide();
+                }
+            }));
+            tradeSearchDebounce.play();
+        });
+        stockSearchField.focusedProperty().addListener((obs, oldVal, newVal) -> { if (!newVal) tradeSearchPopup.hide(); });
 
         Button startBtn = new Button("開始模擬");
         startBtn.getStyleClass().add(Styles.ACCENT);
@@ -301,19 +431,95 @@ public class MainApp extends Application {
             java.time.LocalDate selectedDate = dateSelector.getValue();
             if (selectedDate == null) return;
             
-            System.out.println("玩家在介面上選了日期: " + selectedDate);
+            String targetDateStr = selectedDate.toString(); 
+            System.out.println("玩家在介面上選了日期: " + targetDateStr);
             
-            /* 💡 留給未來的提示：
-               等確定 StockData 的格式後，把這段註解解開即可：
-               
-            if (historyData != null && !historyData.isEmpty()) {
-                for (int i = 0; i < historyData.size(); i++) {
-                    // 根據未來的格式去比對日期
-                    // this.dayIndex = i;
-                    // break;
+            String currentStockId = this.currentSelectedStockId;
+
+            // 💡 【核心優化】：如果快取大表已經有資料且代號相符，直接在記憶體搜尋，0 毫秒極速反應，徹底告別卡頓通知！
+            if (this.historyData != null && !this.historyData.isEmpty()) {
+                boolean dateFound = false;
+                int foundIndex = -1;
+
+                for (int i = 0; i < this.historyData.size(); i++) {
+                    com.stockbucks.StockData data = this.historyData.get(i);
+                    if (data == null || data.getDate() == null) continue;
+
+                    String cleanCsvDate = data.getDate().replace("/", "-").trim();
+                    if (cleanCsvDate.equals(targetDateStr)) {
+                        foundIndex = i;
+                        dateFound = true;
+                        break;
+                    }
+                }
+
+                if (dateFound) {
+                    this.dayIndex = finalIndexUpdate(foundIndex, targetDateStr);
+                    return; // 記憶體中找到了，直接結束，不需要開 Thread 去網路下載！
                 }
             }
-            */
+
+            // 如果記憶體找不到（例如初次載入或換股票），才退化成 Thread 去遠端下載
+            currentPriceLabel.setText("⏳ 正在調閱時空大表中...");
+            new Thread(() -> {
+                try {
+                    List<?> loadedData = aiHub.loadSimulationHistory(currentStockId, null);
+                    if (loadedData != null && !loadedData.isEmpty() && loadedData.get(0) instanceof com.stockbucks.StockData) {
+                        java.util.List<com.stockbucks.StockData> tempHistory = new java.util.ArrayList<>();
+                        for (Object obj : loadedData) {
+                            if (obj instanceof com.stockbucks.StockData) {
+                                tempHistory.add((com.stockbucks.StockData) obj);
+                            }
+                        }
+                        this.historyData = tempHistory; 
+                    }
+
+                    boolean dateFound = false;
+                    int foundIndex = -1;
+
+                    if (this.historyData != null && !this.historyData.isEmpty()) {
+                        for (int i = 0; i < this.historyData.size(); i++) {
+                            com.stockbucks.StockData data = this.historyData.get(i);
+                            if (data == null || data.getDate() == null) continue;
+
+                            String cleanCsvDate = data.getDate().replace("/", "-").trim();
+                            if (cleanCsvDate.equals(targetDateStr)) {
+                                foundIndex = i;
+                                dateFound = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    final boolean finalDateFound = dateFound;
+                    final int finalIndex = foundIndex;
+                    
+                    Platform.runLater(() -> {
+                        if (finalDateFound) {
+                            this.dayIndex = finalIndex;
+                            if (timeline != null) timeline.stop(); 
+
+                            com.stockbucks.StockData selectedDayData = this.historyData.get(this.dayIndex);
+                            currentPriceLabel.setText(String.format("已切換至 %s (等待開盤)", targetDateStr));
+                            priceSeries.getData().clear(); 
+                            tickCount = 0;
+
+                            if (infoLabel != null) {
+                                infoLabel.setText(String.format("歷史模式 | 開盤預估: %.2f", selectedDayData.getOpen()));
+                            }
+                            
+                            refreshAssetView();
+                            updateInfoLabel();
+                            showNotification("AIHub 行事曆匹配成功：已跳轉至 " + targetDateStr, "INFO");
+                        } else {
+                            showWarning("AIHub 查無數據：" + targetDateStr + " 該股未開盤或處於市場休市日！");
+                            resetDatePickerToValid();
+                        }
+                    });
+                } catch (Exception ex) {
+                    Platform.runLater(() -> showWarning("連線至 AIHub 獲取歷史資料失敗！"));
+                }
+            }).start();
         });
 
         //速度控制條
@@ -398,7 +604,11 @@ public class MainApp extends Application {
             }
 
             final double finalPrice = currentPrice;
-            final String currentStockId = "TestDataTSMC";
+            String stockIdFromUi = stockSearchField.getText().trim();
+            if (stockIdFromUi.isEmpty() && marketSearchField != null) {
+                stockIdFromUi = marketSearchField.getText().trim();
+            }
+            final String currentStockId = stockIdFromUi.isEmpty() ? "2330" : stockIdFromUi;
 
             // 4. 開啟多執行緒非同步呼叫，防止 AI 網路延遲導致主畫面 K 線、時脈卡死崩潰
             new Thread(() -> {
@@ -423,7 +633,7 @@ public class MainApp extends Application {
                         }
                         
                         aiChatArea.appendText("【AI 助理】:\n" + aiResponse + "\n\n");
-                        aiChatArea.setScrollTop(Double.MAX_VALUE); // 自動滾動到最底部
+                        Platform.runLater(() -> aiChatArea.setScrollTop(Double.MAX_VALUE));
                         
                         // 恢復元件可用性
                         aiInputField.setDisable(false);
@@ -487,8 +697,11 @@ public class MainApp extends Application {
         emptyPlaceholder.getChildren().addAll(lblEmptyIcon, lblEmptyText);
         
         // 未來做委託功能時，可以把下面 activeOrderTable 顯示出來，暫時先放提示
-        activeOrderLayout.getChildren().add(emptyPlaceholder);
+        VBox.setVgrow(activeOrderTable, Priority.ALWAYS);
+        activeOrderLayout.getChildren().addAll(emptyPlaceholder, activeOrderTable);
         activeOrderTab.setContent(activeOrderLayout);
+
+        refreshActiveOrderVisibility();
 
         // ===== 分頁二：歷史成交 (已成交) =====
         Tab historyOrderTab = new Tab("✅ 歷史成交");
@@ -510,6 +723,50 @@ public class MainApp extends Application {
     private void updateTimelineSpeed(int speedMultiplier) {
         if (timeline == null) return;
         timeline.setRate(speedMultiplier);
+    }
+
+    private void refreshActiveOrderVisibility() {
+        if (observableOrders == null || emptyPlaceholder == null || activeOrderTable == null) return;
+        
+        if (observableOrders.isEmpty()) {
+            // 沒有委託單：顯示 💤 提示，隱藏表格
+            emptyPlaceholder.setVisible(true);
+            emptyPlaceholder.setManaged(true);
+            activeOrderTable.setVisible(false);
+            activeOrderTable.setManaged(false);
+        } else {
+            // 有委託單：隱藏 💤 提示，顯示表格
+            emptyPlaceholder.setVisible(false);
+            emptyPlaceholder.setManaged(false);
+            activeOrderTable.setVisible(true);
+            activeOrderTable.setManaged(true);
+        }
+    }
+
+    // 輔助方法 A：極速同步更新 UI 指針
+    private int finalIndexUpdate(int foundIndex, String targetDateStr) {
+        this.dayIndex = foundIndex;
+        if (timeline != null) timeline.stop();
+        com.stockbucks.StockData selectedDayData = this.historyData.get(this.dayIndex);
+        currentPriceLabel.setText(String.format("已切換至 %s (等待開盤)", targetDateStr));
+        priceSeries.getData().clear();
+        tickCount = 0;
+        if (infoLabel != null) {
+            infoLabel.setText(String.format("歷史模式 | 開盤預估: %.2f", selectedDayData.getOpen()));
+        }
+        refreshAssetView();
+        updateInfoLabel();
+        return foundIndex;
+    }
+
+    // 輔助方法 B：失敗時自動回彈日曆
+    private void resetDatePickerToValid() {
+        if (this.historyData != null && dayIndex < this.historyData.size()) {
+            try {
+                String currentDateStr = this.historyData.get(dayIndex).getDate().replace("/", "-");
+                dateSelector.setValue(java.time.LocalDate.parse(currentDateStr));
+            } catch (Exception ex) {}
+        }
     }
 
     /**
@@ -717,26 +974,60 @@ public class MainApp extends Application {
     }
 
     private void handleTrade(boolean isBuy) {
-        if (currentPriceLabel.getText().contains("--")) return;
+        if ((currentPriceLabel.getText().contains("--"))|| currentPriceLabel.getText().contains("讀取中")) return;
         try {
-            int shares = Integer.parseInt(sharesField.getText());
-            String priceStr = currentPriceLabel.getText().replace("當前市價: ", "");
+            String currentStockId = "2330"; // 預設值
+            if (stockSearchField != null && !stockSearchField.getText().trim().isEmpty()) {
+                currentStockId = stockSearchField.getText().trim();
+            } else if (marketSearchField != null && !marketSearchField.getText().trim().isEmpty()) {
+                currentStockId = marketSearchField.getText().trim();
+            }
+
+            int shares = Integer.parseInt(sharesField.getText().trim());
+            if (shares <= 0) {
+                showWarning("交易股數必須大於 0！");
+                return;
+            }
+
+            //安全解析字串：同時相容「當前市價」與「即時市價」的文本結構
+            String priceStr = currentPriceLabel.getText()
+                    .replace("當前市價: ", "")
+                    .replace("即時市價: ", "")
+                    .trim();
+            
             if (priceStr.contains("(")) {
                 priceStr = priceStr.split("\\(")[0].trim();
             }
             double price = Double.parseDouble(priceStr);
-            String date = (historyData != null && dayIndex < historyData.size()) ? historyData.get(dayIndex).getDate() : "2024-01-01";
 
-            tradingEngine.trading(user, "TestDataTSMC", date, tickCount, shares, price, isBuy);
+            // 4. 動態獲取當前日期
+            String date = (historyData != null && dayIndex < historyData.size()) 
+                    ? historyData.get(dayIndex).getDate() 
+                    : java.time.LocalDate.now().toString(); // 即時模式下用今天日期
 
+            //把寫死的 "TestDataTSMC" 換成動態的 currentStockId
+            tradingEngine.trading(user, currentStockId, date, tickCount, shares, price, isBuy);
+
+            // 6. 更新畫面資產/餘額標籤
             updateInfoLabel();
+            refreshAssetView();
 
+            // 7. 重新載入未成交/委託中的單據表格
             if (activeOrderTable != null) {
                 observableOrders.clear();
-                for (int i = tradingEngine.getPendingOrders().size() - 1; i >= 0; i--) {
-                    observableOrders.add(tradingEngine.getPendingOrders().get(i));
+                //配合tradingEngine 實際的未成交單方法 (getPendingOrders)
+                java.util.List<?> pending = tradingEngine.getPendingOrders();
+                if (pending != null) {
+                    for (int i = pending.size() - 1; i >= 0; i--) {
+                        // 確保轉型安全
+                        if (pending.get(i) instanceof com.stockbucks.Order) {
+                            observableOrders.add((com.stockbucks.Order) pending.get(i));
+                        }
+                    }
                 }
             }
+            
+            //sharesField.clear();
         } catch (NumberFormatException ex) {
             showWarning("請輸入正確的數字格式");
         } catch (Exception ex) {
@@ -785,8 +1076,11 @@ public class MainApp extends Application {
     }
 
     private void updateInfoLabel() {
-        infoLabel.setText(String.format("可用現金: $%,.0f | 庫存: %d 股", 
-            user.getCash(), user.getStockQuantity("TestDataTSMC")));
+        if (infoLabel != null && user != null) {
+            infoLabel.setText(String.format("可用現金: $%,.0f | 庫存: %d 股", 
+                    user.getCash(), 
+                    user.getStockQuantity(currentSelectedStockId))); 
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -897,7 +1191,79 @@ public class MainApp extends Application {
     }
 
     private void handleStartSimulation() {
-        if (historyData == null || dayIndex >= historyData.size()) return;
+        String inputId = stockSearchField.getText().trim();
+        if (!inputId.isEmpty() && !inputId.equals(this.currentSelectedStockId)) {
+            this.currentSelectedStockId = inputId;
+            this.historyData = null; // 倒空舊股票的大表，讓時脈跑動時會去抓新股票的資料
+            this.dayIndex = 0;
+        }
+
+        // 如果定時器正在跑，先無條件關閉它，防止多個執行緒重疊衝突
+        if (timeline != null) timeline.stop();
+
+        // ====================================================================
+        // 🟢 【分流 A】真實即時模式：只抓最新的一筆靜態資料，不跑計時器模擬
+        // ====================================================================
+        if (this.marketMode == com.stockbucks.api.mode.MarketMode.REALTIME) {
+            final String finalStockId = this.currentSelectedStockId;
+            new Thread(() -> {
+                try {
+                    com.stockbucks.api.stock.StockQuote quote = aiHub.fetchStockQuote(finalStockId);
+                    if (quote != null) {
+                        double price = quote.getLastPrice();
+                        double open = quote.getOpenPrice();
+                        
+                        // 直接把價格餵給即時交易撮合引擎
+                        tradingEngine.onPriceUpdate(finalStockId, price, 0);
+
+                        Platform.runLater(() -> {
+                            currentPriceLabel.setText(String.format("即時市價: %.2f (真實即時)", price));
+                            
+                            // 清空舊線圖，直接在圖表畫一條最新的靜態線（或者單一亮點）
+                            priceSeries.getData().clear();
+                            priceSeries.getData().add(new XYChart.Data<>(0, open > 0 ? open : price));
+                            priceSeries.getData().add(new XYChart.Data<>(270, price));
+                            
+                            if (priceSeries.getNode() != null) {
+                                priceSeries.getNode().setStyle("-fx-stroke: #ea4335; -fx-stroke-width: 2px;");
+                            }
+                            
+                            // 隱藏或清空回測專用的漲跌停虛線
+                            if (limitUpSeries != null) limitUpSeries.getData().clear();
+                            if (limitDownSeries != null) limitDownSeries.getData().clear();
+                            refreshAssetView();
+                            updateInfoLabel();
+                        });
+                    }
+                } catch (Exception ex) {
+                    Platform.runLater(() -> currentPriceLabel.setText("即時報價載入失敗"));
+                }
+            }).start();
+            
+            return; // 🛑 核心細節：即時模式到此結束，直接 return，絕對不去碰下方的歷史模擬！
+        }
+
+        // ====================================================================
+        // 🔵 【分流 B】歷史回測模式：原本的動態 Timeline 跑線邏輯
+        // ====================================================================
+        
+        // 2. 自動檢查與加載歷史模擬資料
+        if (historyData == null || historyData.isEmpty()) {
+            try {
+                List<?> loadedData = aiHub.loadSimulationHistory(currentSelectedStockId, null);
+                if (loadedData != null && !loadedData.isEmpty() && loadedData.get(0) instanceof com.stockbucks.StockData) {
+                    this.historyData = (List<com.stockbucks.StockData>) loadedData;
+                }
+            } catch (Exception ex) {
+                showWarning("歷史資料載入失敗，無法啟動模擬！");
+                return;
+            }
+        }
+
+        if (historyData == null || dayIndex >= historyData.size()) {
+            showWarning("暫無可用的回測歷史數據！");
+            return;
+        }
 
         StockData today = historyData.get(dayIndex);
         double yesterdayClose = (dayIndex == 0) ? today.getOpen() : historyData.get(dayIndex - 1).getClose();
@@ -942,6 +1308,7 @@ public class MainApp extends Application {
                 currentTime += 9*60;
                 String currentTimeStr = String.format("%02d:%02d", currentTime / 60, currentTime % 60);
 
+                String simDate = historyData.get(dayIndex).getDate().replace("/", "-");
                 currentPriceLabel.setText("當前市價: " + String.format("%.2f(%s)", currentPrice, currentTimeStr));
                 priceSeries.getData().add(new XYChart.Data<>(tickCount, currentPrice));
                 if (priceSeries.getNode() != null) {
@@ -954,7 +1321,8 @@ public class MainApp extends Application {
                     }
                 }
 
-                tradingEngine.onPriceUpdate("TestDataTSMC", currentPrice, tickCount++);
+                tradingEngine.onPriceUpdate(this.currentSelectedStockId, currentPrice, tickCount++);
+                refreshAssetView();
 
                 List <TradeRecord> records = tradingEngine.getDailyRecords();
                 observableRecords.clear();
@@ -1015,7 +1383,12 @@ public class MainApp extends Application {
         String selectedTabName = marketTabPane.getSelectionModel().getSelectedItem() != null 
                 ? marketTabPane.getSelectionModel().getSelectedItem().getText() : "全部最愛";
 
+        marketTabPane.getSelectionModel().clearSelection();
         marketTabPane.getTabs().clear();
+
+        final String currentSimDate = (this.historyData != null && this.dayIndex < this.historyData.size()) 
+            ? this.historyData.get(this.dayIndex).getDate().replace("/", "-").trim() 
+            : java.time.LocalDate.now().toString();
 
         // 1. 根據資料結構中的每一個 Key，建立對應的 Tab
         for (String tabName : watchlistData.keySet()) {
@@ -1032,10 +1405,11 @@ public class MainApp extends Application {
             grid.setPadding(new Insets(15));
 
             ObservableList<String> stocksInTab = watchlistData.get(tabName);
-            int col = 0, row = 0;
+            final int[] cardCount = {0};
             
-            for (String stockName : stocksInTab) {
-                // 建立股票字卡 (仿國泰方格佈局)
+            for (String stockInput : stocksInTab) {
+                String targetStockId = stockInput.trim();
+                // 建立股票字卡
                 AnchorPane cardContainer = new AnchorPane();
                 
                 VBox card = new VBox(10);
@@ -1044,76 +1418,203 @@ public class MainApp extends Application {
                 card.setPrefSize(220, 150);
                 card.setAlignment(Pos.CENTER);
 
-                Label lblName = new Label(stockName);
+                Label lblName = new Label(stockInput + " 讀取中...");
                 lblName.getStyleClass().add(Styles.TITLE_4);
                 
-                // 模擬隨機價格與漲跌幅
-                double mockPrice = 50 + Math.random() * 500;
-                double mockPercent = -5 + Math.random() * 10;
-                
-                Label lblPrice = new Label(String.format("$%.2f", mockPrice));
-                lblPrice.setStyle(mockPercent >= 0 
-                    ? "-fx-text-fill: #ea4335; -fx-font-size: 24px; -fx-font-weight: bold;" 
-                    : "-fx-text-fill: #34a853; -fx-font-size: 24px; -fx-font-weight: bold;");
+                Label lblPrice = new Label("$ --.--");
+                lblPrice.setStyle("-fx-font-size: 24px; -fx-font-weight: bold; -fx-text-fill: #adbac7;");
 
-                Label lblPercent = new Label(String.format("%s%.2f%%", mockPercent >= 0 ? "+" : "", mockPercent));
-                lblPercent.setStyle(mockPercent >= 0 ? "-fx-text-fill: #ea4335;" : "-fx-text-fill: #34a853;");
+                Label lblPercent = new Label("0.00%");
+                lblPercent.setStyle("-fx-text-fill: #8b949e;");
 
                 card.getChildren().addAll(lblName, lblPrice, lblPercent);
-                
-                // 點擊字卡本體切換到交易頁面
-                card.setOnMouseClicked(e -> switchView(MenuType.TRADE));
 
                 // 2.刪除按鈕
                 Button deleteBtn = new Button();
                 deleteBtn.getStyleClass().addAll(Styles.BUTTON_CIRCLE, Styles.FLAT, Styles.DANGER);
-                deleteBtn.setStyle("-fx-font-size: 10px; -fx-padding: 2 6 2 6;"); // 縮小按鈕尺寸
+                deleteBtn.setStyle("-fx-font-size: 10px; -fx-padding: 2 6 2 6;"); 
                 
-                // 用 JavaFX 原生線條畫出一個簡單的小 X
                 javafx.scene.shape.SVGPath xIcon = new javafx.scene.shape.SVGPath();
                 xIcon.setContent("M18 6L6 18M6 6l12 12");
                 xIcon.setStroke(javafx.scene.paint.Color.web("#a59d9d"));
                 xIcon.setStrokeWidth(1.5);
                 deleteBtn.setGraphic(xIcon);
 
-                // 3.實作刪除按鈕的點擊邏輯
                 deleteBtn.setOnAction(e -> {
-                    // 防止點擊刪除按鈕時，同時觸發 VBox 的切換頁面事件（阻斷事件冒泡）
                     e.consume(); 
-
                     if (tabName.equals("全部最愛")) {
-                        // A 邏輯：在全部最愛刪除 -> 從「所有群組」中徹底拔除該個股
                         for (String key : watchlistData.keySet()) {
-                            watchlistData.get(key).remove(stockName);
+                            watchlistData.get(key).remove(stockInput);
                         }
                     } else {
-                        // B 邏輯：在特定群組刪除 -> 僅移出該分頁，保留在全部最愛中
-                        watchlistData.get(tabName).remove(stockName);
+                        watchlistData.get(tabName).remove(stockInput);
                     }
-
-                    // 重新重整分頁 UI，讓被刪除的字卡平滑消失
                     refreshWatchlistTabs();
                 });
 
-                // 4. 將字卡本體與刪除按鈕裝進 Container 中，並設定 X 按鈕靠右上角定位
+                // 4. 將字卡本體與刪除按鈕裝進 Container 中
                 AnchorPane.setTopAnchor(card, 0.0);
                 AnchorPane.setLeftAnchor(card, 0.0);
                 AnchorPane.setRightAnchor(card, 0.0);
                 AnchorPane.setBottomAnchor(card, 0.0);
-
                 AnchorPane.setTopAnchor(deleteBtn, 5.0);
                 AnchorPane.setRightAnchor(deleteBtn, 5.0);
 
+                // ⚠️ 微調點 2：必須先組合完 container 的內容物，才能加進 grid 裡！
                 cardContainer.getChildren().addAll(card, deleteBtn);
 
-                // 5. 將原本塞進 grid 的物件換成新包裝好的 container
+                // ✨ 組合完畢後，在這裡把完整的 cardContainer 提早加入 grid 卡位
+                int currentCount = cardCount[0];
+                int col = currentCount % 4;
+                int row = currentCount / 4;
                 grid.add(cardContainer, col, row);
+                cardCount[0]++; 
+
+                new Thread(() -> {
+                    try {
+                        double realPrice = 0.0;
+                        double changePercent = 0.0;
+                        String detectedName = targetStockId; // 預設為代號
+                        boolean isCompanyExistInThisEra = true; // 標記該公司在該時代是否存在
+
+                        // 雙重保險第一層：從全市場清單中，用 2330 匹配出中文名稱
+                        List<com.stockbucks.api.stock.StockProfile> profiles = aiHub.fetchAllListedStocks();
+                        if (profiles != null) {
+                            for (com.stockbucks.api.stock.StockProfile p : profiles) {
+                                if (p.getStockId() != null && p.getStockId().equals(targetStockId)) {
+                                    detectedName = p.getStockName(); 
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (this.marketMode == com.stockbucks.api.mode.MarketMode.REALTIME) {
+                            com.stockbucks.api.stock.StockQuote quote = aiHub.fetchStockQuote(targetStockId);
+                            if (quote != null) {
+                                realPrice = quote.getLastPrice(); 
+                                
+                                // 雙重保險第二層：如果第一層沒撈到名字，且 quote 裡有名字，就用 quote 的
+                                if (detectedName.equals(targetStockId) && quote.getStockName() != null && !quote.getStockName().isBlank()) {
+                                    detectedName = quote.getStockName();
+                                }
+                                
+                                double open = quote.getOpenPrice();
+                                if (open > 0) {
+                                    changePercent = ((realPrice - open) / open) * 100;
+                                }
+                            }
+                        } else {
+                            //歷史回測模式
+                            List<?> hist = aiHub.loadSimulationHistory(targetStockId, null);
+                            if (hist != null && !hist.isEmpty()) {
+                                int targetIndex = -1;
+
+                                // 1. 尋找精確匹配當前穿梭日期（currentSimDate）的 K 線索引
+                                for (int i = 0; i < hist.size(); i++) {
+                                    Object dataRow = hist.get(i);
+                                    if (dataRow instanceof com.stockbucks.StockData) {
+                                        String histDate = ((com.stockbucks.StockData) dataRow).getDate().replace("/", "-").trim();
+                                        if (histDate.equals(currentSimDate)) {
+                                            targetIndex = i;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // 🛡️ 2. 時空防禦檢查：如果比最早的歷史還要早，代表這家公司「在此時代尚未上市」
+                                Object firstRow = hist.get(0);
+                                if (firstRow instanceof com.stockbucks.StockData) {
+                                    String firstAvailDate = ((com.stockbucks.StockData) firstRow).getDate().replace("/", "-").trim();
+                                    if (targetIndex == -1 && currentSimDate.compareTo(firstAvailDate) < 0) {
+                                        isCompanyExistInThisEra = false; 
+                                    }
+                                }
+
+                                // 3. 如果已上市但碰上休市日，則往前尋找最近一個交易日
+                                if (isCompanyExistInThisEra && targetIndex == -1) {
+                                    for (int i = hist.size() - 1; i >= 0; i--) {
+                                        Object dataRow = hist.get(i);
+                                        if (dataRow instanceof com.stockbucks.StockData) {
+                                            String histDate = ((com.stockbucks.StockData) dataRow).getDate().replace("/", "-").trim();
+                                            if (histDate.compareTo(currentSimDate) <= 0) {
+                                                targetIndex = i;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 4. 撈出數據並計算相較於前一天的漲跌幅
+                                if (targetIndex >= 0) {
+                                    com.stockbucks.StockData currentDay = (com.stockbucks.StockData) hist.get(targetIndex);
+                                    realPrice = currentDay.getClose();
+                                    
+                                    if (targetIndex > 0) {
+                                        Object prevRow = hist.get(targetIndex - 1);
+                                        if (prevRow instanceof com.stockbucks.StockData) {
+                                            double prevClose = ((com.stockbucks.StockData) prevRow).getClose();
+                                            if (prevClose > 0) {
+                                                changePercent = ((realPrice - prevClose) / prevClose) * 100;
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    isCompanyExistInThisEra = false; 
+                                }
+                            } else {
+                                isCompanyExistInThisEra = false; 
+                            }
+                        }
+
+                        // 傳遞給 UI 執行緒刷新
+                        final double finalPrice = realPrice;
+                        final double finalPercent = changePercent;
+                        final boolean finalShowCard = isCompanyExistInThisEra; 
+                        
+                        final String finalTitle = detectedName.equals(targetStockId) 
+                                ? targetStockId 
+                                : detectedName + " (" + targetStockId + ")";
+                        
+                        Platform.runLater(() -> {
+                            //如果這家公司在當前時空不存在，直接中斷不顯示
+                            if (!finalShowCard) {
+                                cardContainer.setVisible(false);
+                                cardContainer.setManaged(false);
+                                return; 
+                            }
+
+                            cardContainer.setVisible(true);
+                            cardContainer.setManaged(true);
+
+                            lblName.setText(finalTitle);
+                            lblPrice.setText(String.format("$%,.2f", finalPrice));
+                            lblPercent.setText(String.format("%s%.2f%%", finalPercent >= 0 ? "+" : "", finalPercent));
+                            
+                            if (finalPercent > 0) {
+                                lblPrice.setStyle("-fx-text-fill: #ea4335; -fx-font-size: 24px; -fx-font-weight: bold;");
+                                lblPercent.setStyle("-fx-text-fill: #ea4335;");
+                            } else if (finalPercent < 0) {
+                                lblPrice.setStyle("-fx-text-fill: #34a853; -fx-font-size: 24px; -fx-font-weight: bold;");
+                                lblPercent.setStyle("-fx-text-fill: #34a853;");
+                            } else {
+                                lblPrice.setStyle("-fx-text-fill: #adbac7; -fx-font-size: 24px; -fx-font-weight: bold;");
+                                lblPercent.setStyle("-fx-text-fill: #adbac7;");
+                            }
+                        });
+
+                    } catch (Exception ex) {
+                        Platform.runLater(() -> lblName.setText(stockInput + " (載入失敗)"));
+                    }
+                }).start();
                 
-                col++; 
-                if (col > 3) { 
-                    col = 0; 
-                    row++; 
-                }
+                // 點擊字卡本體切換到交易頁面
+                card.setOnMouseClicked(e -> {
+                    if (this.stockSearchField != null) {
+                        this.stockSearchField.setText(stockInput);
+                        handleStartSimulation(); // 自動幫玩家觸發看盤與跑線邏輯！
+                    }
+                    switchView(MenuType.TRADE);
+                });
             }
 
             scrollPane.setContent(grid);
@@ -1130,12 +1631,22 @@ public class MainApp extends Application {
         Tab addTab = new Tab("＋");
         marketTabPane.getTabs().add(addTab);
 
+        marketTabPane.getSelectionModel().selectedItemProperty().removeListener(this::watchlistTabChangeListener);
+        marketTabPane.getSelectionModel().selectedItemProperty().addListener(this::watchlistTabChangeListener);
+
         // 監聽分頁切換事件：當點到「＋」號時，觸發新增分頁對話框
-        marketTabPane.getSelectionModel().selectedItemProperty().addListener((observable, oldTab, newTab) -> {
-            if (newTab != null && newTab.getText().equals("＋")) {
-                Platform.runLater(() -> handleAddNewWatchlistPage());
+        for (Tab t : marketTabPane.getTabs()) {
+            if (t.getText().equals(selectedTabName)) {
+                marketTabPane.getSelectionModel().select(t);
+                break;
             }
-        });
+        }
+    }
+
+    private void watchlistTabChangeListener(javafx.beans.value.ObservableValue<? extends Tab> observable, Tab oldTab, Tab newTab) {
+        if (newTab != null && "＋".equals(newTab.getText())) {
+            Platform.runLater(() -> handleAddNewWatchlistPage());
+        }
     }
 
     /**
@@ -1194,6 +1705,8 @@ public class MainApp extends Application {
      * ✨ 動態對接 User 數據，渲染仿國泰/富邦風格的圓餅圖資產面板
      */
     private void refreshAssetView() {
+        if (assetView == null || user == null) return;
+
         assetView.getChildren().clear(); // 清空舊畫面
 
         // 1. 標題
@@ -1206,35 +1719,118 @@ public class MainApp extends Application {
         assetTabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE); // 禁用關閉按鈕
         VBox.setVgrow(assetTabPane, Priority.ALWAYS);
 
-        //第一分頁：未實現資產
+        // 第一分頁：未實現資產
         Tab unrealizedTab = new Tab("📈 未實現資產");
         VBox unrealizedContent = new VBox(15);
         unrealizedContent.setPadding(new Insets(15, 0, 0, 0));
         
         // 取得當前模擬的股票最新價格
-        double currentPrice = 0.0;
+        String currentStockId = "2330";
+        if (stockSearchField != null && !stockSearchField.getText().trim().isEmpty()) {
+            currentStockId = stockSearchField.getText().trim();
+        } else if (marketSearchField != null && !marketSearchField.getText().trim().isEmpty()) {
+            currentStockId = marketSearchField.getText().trim();
+        }
+
+        // 安全獲取「當前市價」（回測模式下優先採用歷史關聯價）
+        double currentPrice = 600.0; // 預設安全底線
+        if (historyData != null && !historyData.isEmpty()) {
+            // 防止指標越界安全保護
+            int safeIndex = Math.min(Math.max(0, this.dayIndex), historyData.size() - 1);
+            currentPrice = historyData.get(safeIndex).getClose(); // 優先以回測紀錄的收盤價為基準
+        }
+
         try {
-            currentPrice = Double.parseDouble(currentPriceLabel.getText().replace("當前市價: ", ""));
+            if (currentPriceLabel != null) {
+                String labelText = currentPriceLabel.getText();
+                if (labelText.contains("當前市價:") || labelText.contains("即時市價:")) {
+                    String cleanPrice = labelText.replace("當前市價:", "").replace("即時市價:", "").trim();
+                    if (cleanPrice.contains("(")) {
+                        cleanPrice = cleanPrice.split("\\(")[0].trim();
+                    }
+                    currentPrice = Double.parseDouble(cleanPrice);
+                }
+            }
         } catch (Exception e) {
-            currentPrice = (historyData != null && !historyData.isEmpty()) ? historyData.get(dayIndex).getClose() : 600.0;
+            // 如果從 UI 標籤抽取失敗，默默沿用上方對齊 historyData 的安全價格，絕不中斷
+        }
+
+        // 獲取當前模擬的精準時空日期 (格式如 "2010-09-14")
+        String currentSimDate = java.time.LocalDate.now().toString();
+        if (historyData != null && !historyData.isEmpty()) {
+            int safeIndex = Math.min(Math.max(0, this.dayIndex), historyData.size() - 1);
+            currentSimDate = historyData.get(safeIndex).getDate().replace("/", "-").trim();
         }
 
         // 呼叫 User 內的新方法，精準計算出所有庫存股票的總市值
-        double totalStockValue = user.getTotalPresentValue("TestDataTSMC", currentPrice);
-        
-        // 總資產 = 股票總市值
-        double totalAsset = totalStockValue;
-
-        //總原始購買成本
+        double totalStockValue = 0.0;
+        // 總原始購買成本
         double totalStockCost = 0.0;
         java.util.HashMap<String, StockHoldings> holdings = user.getHolding();
+
+        java.util.List<javafx.scene.chart.PieChart.Data> validPieData = new java.util.ArrayList<>();
+        VBox legendList = new VBox(12);
+        legendList.setAlignment(Pos.CENTER_LEFT);
+
+        Label lblListTitle = new Label("📊 各持股配置比例 (" + currentSimDate + ")");
+        lblListTitle.getStyleClass().addAll(Styles.TEXT_BOLD, Styles.TITLE_4);
+        legendList.getChildren().add(lblListTitle);
+
         if (holdings != null && !holdings.isEmpty()) {
             for (String stockID : holdings.keySet()) {
-                totalStockCost += user.getOneTotalCost(stockID);
+                // 1. 現場計算該股票在該時空下的股數
+                int sharesAtTime = 0;
+                double costForBuy = 0.0;
+                int totalSharesBought = 0;
+
+                // 安全防空檢查
+                if (user.getTradeHistory() != null) {
+                    for (com.stockbucks.TradeRecord record : user.getTradeHistory()) {
+                        if (record == null || record.getDate() == null) continue;
+                        String cleanRecordDate = record.getDate().replace("/", "-").trim();
+                        // 只有小於等於當前穿梭日期的交易才算數
+                        if (cleanRecordDate.compareTo(currentSimDate) <= 0 && record.getStockID().equals(stockID)) {
+                            if ("買入".equals(record.getType())) {
+                                sharesAtTime += record.getShares();
+                                costForBuy += record.getTotalCost();
+                                totalSharesBought += record.getShares();
+                            } else if ("賣出".equals(record.getType())) {
+                                sharesAtTime -= record.getShares();
+                            }
+                        }
+                    }
+                }
+
+                // 如果在該時空下根本還沒買，或者已清空持股，直接隱形
+                if (sharesAtTime <= 0) continue;
+
+                // 2. 現場計算該持股的歷史均價與成本
+                double averagePrice = totalSharesBought > 0 ? (costForBuy / totalSharesBought) : 0.0;
+                double eachStockCost = averagePrice * sharesAtTime;
+                
+                // 3. 計算市值：如果是當前跑線股票用動態價，其餘股票先用歷史成本保底
+                double eachStockValue = 0.0;
+                if (stockID.equals(currentStockId)) {
+                    eachStockValue = sharesAtTime * currentPrice;
+                } else {
+                    eachStockValue = eachStockCost; 
+                }
+
+                totalStockValue += eachStockValue;
+                totalStockCost += eachStockCost;
+
+                validPieData.add(new javafx.scene.chart.PieChart.Data(stockID, eachStockValue));
+
+                Label lblStockData = new Label(String.format("🟢 庫存股票 [%s]: (%d 股 | 市值 $ %,.2f | 成本 $ %,.2f)", 
+                        stockID, sharesAtTime, eachStockValue, eachStockCost));
+                lblStockData.setStyle("-fx-font-size: 14px; -fx-text-fill: #57ab5a;");
+                legendList.getChildren().add(lblStockData);
             }
         }
 
-        double totalReturn = totalAsset - totalStockCost; // 報酬金額
+        // 💡 遵照需求：總資產即為庫存持股總現值，排除可用現金
+        double totalAsset = totalStockValue;
+        double totalReturn = totalAsset - totalStockCost; // 報酬金額 (總市值 - 總成本)
         double returnRate = totalStockCost > 0 ? (totalReturn / totalStockCost) * 100 : 0.0; // 報酬率
 
         // 3. 【資產總現值面板】 (仿手機 App 頂部字卡樣式)
@@ -1251,18 +1847,18 @@ public class MainApp extends Application {
         Label lblCashAndStock = new Label(String.format("原始投資總成本: $ %,.2f", totalStockCost));
         lblCashAndStock.setStyle("-fx-text-fill: #58a6ff; -fx-font-size: 13px;");
 
-        //歷史總報酬: +$ 45,000.00 (+7.50%) 或 -$ 12,000.00 (-2.30%)
-        String sign = totalReturn >= 0 ? "+" : ""; // 賺錢補上加號
+        // 歷史總報酬
+        String sign = totalReturn >= 0 ? "+" : ""; 
         Label lblTotalReturn = new Label(String.format("預估未實現損益: %s$ %,.2f (%s %.2f%%)", 
                 sign, totalReturn, sign, returnRate));
 
-        //顏色分流，如果想改成美股反過來，可以把底下的顏色代碼互換
+        // 顏色分流 (賺紅賠綠)
         if (totalReturn > 0) {
-            lblTotalReturn.setStyle("-fx-text-fill: #da3633; -fx-font-size: 13px; -fx-font-weight: bold;"); // 鮮明紅
+            lblTotalReturn.setStyle("-fx-text-fill: #da3633; -fx-font-size: 13px; -fx-font-weight: bold;"); 
         } else if (totalReturn < 0) {
-            lblTotalReturn.setStyle("-fx-text-fill: #2da44e; -fx-font-size: 13px; -fx-font-weight: bold;"); // 活潑綠
+            lblTotalReturn.setStyle("-fx-text-fill: #2da44e; -fx-font-size: 13px; -fx-font-weight: bold;"); 
         } else {
-            lblTotalReturn.setStyle("-fx-text-fill: #adbac7; -fx-font-size: 13px;"); // 平盤灰
+            lblTotalReturn.setStyle("-fx-text-fill: #adbac7; -fx-font-size: 13px;"); 
         }
         
         totalAssetPanel.getChildren().addAll(lblPanelTitle, lblTotalAssetValue, lblCashAndStock, lblTotalReturn);
@@ -1279,46 +1875,12 @@ public class MainApp extends Application {
         pieChart.setLegendVisible(false); // 關閉下方預設圖例
         pieChart.setPrefSize(260, 260);
 
-        // --- 建立右側的詳細比例數據清單 ---
-        VBox legendList = new VBox(12);
-        legendList.setAlignment(Pos.CENTER_LEFT);
-
-        Label lblListTitle = new Label("📊 各資產配置比例");
-        lblListTitle.getStyleClass().addAll(Styles.TEXT_BOLD, Styles.TITLE_4);
-        legendList.getChildren().add(lblListTitle);
-
-        //迴圈遍歷 user.getHoldings()，動態將每檔擁有的股票塞入圖表與明細
-        if (holdings != null && !holdings.isEmpty()) {
-            for (String stockID : holdings.keySet()) {
-                // 計算這檔股票的當前價值
-                double eachStockValue = 0;
-                if (stockID.equals("TestDataTSMC")) {
-                    eachStockValue = user.getOnePresentValue(stockID, currentPrice);
-                } else {
-                    eachStockValue = user.getOneTotalCost(stockID);
-                }
-
-                if (eachStockValue > 0) {
-                    // 塞入圓餅圖數據
-                    pieChart.getData().add(new javafx.scene.chart.PieChart.Data(stockID, eachStockValue));
-                    
-                    // 計算此個股佔總資產的百分比
-                    double stockPercent = totalAsset > 0 ? (eachStockValue / totalAsset) * 100 : 0;
-                    int shares = user.getStockQuantity(stockID);
-                    double eachStockCost = user.getOneTotalCost(stockID);
-
-                    Label lblStockData = new Label(String.format("🟢 庫存股票 [%s]: %.1f%% (%d 股 | 市值 $ %,.2f | 成本 $ %,.2f)", 
-                            stockID, stockPercent, shares, eachStockValue, eachStockCost));
-                    lblStockData.setStyle("-fx-font-size: 14px; -fx-text-fill: #57ab5a;");
-                    legendList.getChildren().add(lblStockData);
-                }
-            }
-        }
-
-        // C. 防呆：如果完全沒資產
-        if (totalAsset == 0) {
+        // 迴圈遍歷，動態將每檔擁有的持股股票塞入圖表與明細（排除現金）
+        if (!validPieData.isEmpty()) {
+            for (javafx.scene.chart.PieChart.Data pData : validPieData) { pieChart.getData().add(pData); }
+        } else {
             pieChart.getData().add(new javafx.scene.chart.PieChart.Data("無庫存股票", 1));
-            legendList.getChildren().add(new Label("⚠️ 目前帳戶內沒有任何股票庫存。"));
+            legendList.getChildren().add(new Label("⚠️ 在 " + currentSimDate + "，您在這個時空內沒有任何股票庫存。"));
         }
 
         // 將圖表與數據面板並排組合
@@ -1326,12 +1888,12 @@ public class MainApp extends Application {
         unrealizedContent.getChildren().add(chartSection);
         unrealizedTab.setContent(unrealizedContent);
 
-        //第二分頁：已實現損益
+        // 第二分頁：已實現損益
         Tab realizedTab = new Tab("💰 已實現損益");
         VBox realizedContent = new VBox(15);
         realizedContent.setPadding(new Insets(15, 10, 10, 10));
 
-        // 取得使用者已經平倉（賣出）結算後的累積已實現利潤
+        // 「截至當前時空為止」已經平倉的總損益
         double realizedProfit = user.getRealizedProfit();
 
         // 建立已實現損益字卡面板
@@ -1347,7 +1909,6 @@ public class MainApp extends Application {
         Label lblRealizedValue = new Label(String.format("%s$ %,.2f", realizedSign, realizedProfit));
         lblRealizedValue.setStyle("-fx-font-size: 32px; -fx-font-weight: bold;");
 
-        // 根據正負損益進行強烈的顏色流動（紅賺綠賠）
         if (realizedProfit > 0) {
             lblRealizedValue.setStyle(lblRealizedValue.getStyle() + " -fx-text-fill: #da3633;");
         } else if (realizedProfit < 0) {
@@ -1363,7 +1924,7 @@ public class MainApp extends Application {
         realizedContent.getChildren().add(realizedPanel);
         realizedTab.setContent(realizedContent);
 
-        //最後將兩個分頁加入資產總覽主畫面
+        // 最後將兩個分頁加入資產總覽主畫面
         assetTabPane.getTabs().addAll(unrealizedTab, realizedTab);
         assetView.getChildren().add(assetTabPane);
     }
