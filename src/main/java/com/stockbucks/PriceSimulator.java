@@ -10,7 +10,7 @@ public class PriceSimulator {
     private List <Double> dayPath = new ArrayList<>();
     private int currentIndex = 0;
 
-    private double getTickChangeSize(double price) {
+    public double getTickChangeSize(double price) {
         if (price < 10) {
             return 0.01;
         }

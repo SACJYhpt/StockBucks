@@ -25,6 +25,11 @@ public class TradingEngine {
 
     // isBuy: 0: sell, 1: buy
     public void trading(User user, String stockID, String date, int currentMinute, int shares, double price, boolean isBuy) {
+        if (date == null || date.trim().isEmpty()) {
+            notificationQueue.add(" 委託失敗：無效的交易日期。");
+            return;
+        }
+
         date = date.contains(" ") ? date.split(" ")[0] : date;
         // 日期切換與交割清算
         if (currentDate.isEmpty()) {
@@ -139,10 +144,18 @@ public class TradingEngine {
         double totalCost = shares * matchPrice;
         long commission = (long) Math.max(1, Math.floor(totalCost * 0.001425));
 
+        String dateTplus2;
+        try {
+            dateTplus2 = getDateTplus2(date);
+        }
+        catch (Exception e) {
+            System.err.println("🚨 結算日期計算發生異常: " + e.getMessage());
+            dateTplus2 = date;
+        }
+
         if (order.isBuy()) {
             totalCost += commission;
 
-            String dateTplus2 = getDateTplus2(date);
             user.getSettlementManager().addSettlement(dateTplus2, totalCost * -1);
             user.stockBuying(stockID, shares, totalCost);
 
@@ -158,10 +171,17 @@ public class TradingEngine {
             System.out.println("【交易】交易成功 " + record);
         }
         else {
+            if (shares > user.getStockQuantity(stockID)) {
+                notificationQueue.add("【交易】交易失敗，持有庫存不足");
+                System.out.println("【交易】交易失敗，持有庫存不足");
+                order.setStatus(Order.OrderStatus.FAILED);
+                pendingOrders.add(order);
+                return;
+            }
+
             long tax = (long) Math.floor(totalCost*0.003);
             totalCost -= (commission + tax);
 
-            String dateTplus2 = getDateTplus2(date);
             user.getSettlementManager().addSettlement(dateTplus2, totalCost);
             user.stockSelling(stockID, shares);
 
@@ -193,9 +213,13 @@ public class TradingEngine {
         return notificationQueue.remove(0);
     }
 
-    public String getDateTplus2(String date) {
+    public String getDateTplus2(String date) throws NullPointerException {
+        if (globalCalender == null) {
+            throw new NullPointerException("交易日曆(globalCalender)尚未初始化！");
+        }
         String pureDate = date.contains(" ") ? date.split(" ")[0] : date;
         int currentIndex = globalCalender.indexOf(pureDate);
+
         if (currentIndex == -1) {
             System.err.println("找不到交易日: " + pureDate);
             return pureDate;

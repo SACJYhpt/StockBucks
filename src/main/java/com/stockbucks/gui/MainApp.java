@@ -2,16 +2,21 @@ package com.stockbucks.gui;
 
 import atlantafx.base.theme.PrimerDark;
 import atlantafx.base.theme.Styles;
+
 import com.stockbucks.*;
 import com.stockbucks.api.AIHub;
 
 import javafx.application.Application;
 import javafx.application.Platform;
+
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.geometry.Side;
+import javafx.geometry.Rectangle2D;
+
 import javafx.scene.Scene;
 import javafx.scene.chart.LineChart;
 import javafx.scene.chart.NumberAxis;
@@ -20,17 +25,25 @@ import javafx.scene.control.*;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
+import javafx.scene.text.Text;
 import javafx.stage.Stage;
+import javafx.stage.Screen;
 import javafx.stage.StageStyle;
+
+import javafx.animation.TranslateTransition;
+import javafx.animation.ParallelTransition;
 import javafx.animation.FadeTransition;
 import javafx.animation.Animation;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
-import javafx.util.Duration;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
+import java.text.NumberFormat;
+
+import javafx.util.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -51,11 +64,13 @@ public class MainApp extends Application {
     private ObservableList<Order> observableOrders = FXCollections.observableArrayList();
     private Label currentPriceLabel = new Label("當前市價: --");
     private Label infoLabel = new Label();
+    private TextField priceField;
     private TextField sharesField = new TextField("1000");
     private LineChart<Number, Number> lineChart;
     private XYChart.Series<Number, Number> priceSeries = new XYChart.Series<>();
     private XYChart.Series<Number, Number> limitUpSeries;
     private XYChart.Series<Number, Number> limitDownSeries;
+    private XYChart.Series<Number, Number> yesterdayCloseSeries;
 
     private HBox backtestControlBar;  // 包含時空選擇與速控的容器
     private DatePicker dateSelector;  // 月曆時空選擇器
@@ -66,6 +81,7 @@ public class MainApp extends Application {
     private int tickCount = 0;
     private List<StockData> historyData = new ArrayList<>();
     private int dayIndex = 0;
+    private double currentPrice;
     private com.stockbucks.api.mode.MarketMode marketMode = com.stockbucks.api.mode.MarketMode.HISTORY;
     private Timeline timeline;
     private static final double BASE_INTERVAL_MS = 1000.0;
@@ -406,7 +422,164 @@ public class MainApp extends Application {
         tradeControlPanel.setPadding(new Insets(10));
         tradeControlPanel.setStyle("-fx-background-color: #2d333b; -fx-background-radius: 8;");
 
-        sharesField.setPrefWidth(100);
+        // 讓原本就有的 currentPriceLabel 變成可以點擊帶入價格
+        if (currentPriceLabel != null) {
+            currentPriceLabel.setCursor(javafx.scene.Cursor.HAND);
+            currentPriceLabel.setOnMouseClicked(event -> {
+                if (currentPrice > 0) {
+                    priceField.setText(String.format("%.2f", currentPrice));
+                    showNotification("💡 已將價格帶入為當前市價：" + String.format("%.2f", currentPrice), "INFO");
+                }
+            });
+        }
+
+        // 價格控制欄位：上下分層按鈕 (左側/右側按鈕各切上下兩半。上：1 Tick / 下：10 Tick)
+        priceField = new TextField();
+        priceField.setPromptText("限價");
+        priceField.setPrefWidth(85);
+        priceField.setStyle("-fx-background-color: #22272e; -fx-text-fill: #adbac7; -fx-alignment: CENTER; -fx-font-weight: bold; -fx-border-color: #444c56; -fx-border-radius: 4;");
+
+        // 讓輸入文字在「滑鼠點擊外面/失去焦點」時，自動四捨五入修正為合法 Tick
+        priceField.focusedProperty().addListener((observable, oldValue, newValue) -> {
+            if (!newValue) { // 代表玩家輸入完點擊其他地方，失去焦點了
+                String text = priceField.getText().trim();
+                if (text.isEmpty()) return;
+                try {
+                    double inputPrice = Double.parseDouble(text);
+                    if (inputPrice <= 0) return;
+
+                    double tickSize = simulator.getTickChangeSize(inputPrice);
+
+                    double validatedPrice = Math.round(inputPrice / tickSize) * tickSize;
+
+                    double newTickSize = simulator.getTickChangeSize(validatedPrice);
+                    if (tickSize != newTickSize) {
+                        validatedPrice = Math.round(inputPrice / newTickSize) * newTickSize;
+                    }
+
+                    priceField.setText(String.format("%.2f", validatedPrice));
+                }
+                catch (NumberFormatException ex) {
+                    if (currentPrice > 0) {
+                        priceField.setText(String.format("%.2f", currentPrice));
+                    }
+                }
+            }
+        });
+
+        // 建立價格【減少】的上下複合按鈕 (上: 減1 Tick, 下: 減10 Tick)
+        Button btnPriceMinus1 = new Button("◀");
+        Button btnPriceMinus10 = new Button("⇇");
+        btnPriceMinus1.setStyle("-fx-background-color: #444c56; -fx-text-fill: #adbac7; -fx-cursor: hand; -fx-font-size: 10px; -fx-padding: 2 6;");
+        btnPriceMinus10.setStyle("-fx-background-color: #353c45; -fx-text-fill: #8b949e; -fx-cursor: hand; -fx-font-size: 10px; -fx-padding: 2 6;");
+        btnPriceMinus1.setPrefWidth(28);
+        btnPriceMinus10.setPrefWidth(28);
+
+        btnPriceMinus1.setOnAction(e -> {
+            try {
+                double currentVal = Double.parseDouble(priceField.getText());
+                double tickSize = simulator.getTickChangeSize(currentVal);
+                priceField.setText(String.format("%.2f", Math.max(0, currentVal - tickSize)));
+            } catch (NumberFormatException ex) { priceField.setText(String.format("%.2f", currentPrice)); }
+        });
+
+        btnPriceMinus10.setOnAction(e -> {
+            try {
+                double currentVal = Double.parseDouble(priceField.getText());
+                for (int i = 0; i < 10; i++) {
+                    currentVal -= simulator.getTickChangeSize(currentVal);
+                }
+                priceField.setText(String.format("%.2f", Math.max(0, currentVal)));
+            } catch (NumberFormatException ex) { priceField.setText(String.format("%.2f", currentPrice)); }
+        });
+        VBox priceMinusBox = new VBox(2, btnPriceMinus1, btnPriceMinus10);
+
+        // 建立價格【增加】的上下複合按鈕 (上: 加1 Tick, 下: 加10 Tick)
+        Button btnPricePlus1 = new Button("▶");
+        Button btnPricePlus10 = new Button("⇉");
+        btnPricePlus1.setStyle("-fx-background-color: #444c56; -fx-text-fill: #adbac7; -fx-cursor: hand; -fx-font-size: 10px; -fx-padding: 2 6;");
+        btnPricePlus10.setStyle("-fx-background-color: #353c45; -fx-text-fill: #8b949e; -fx-cursor: hand; -fx-font-size: 10px; -fx-padding: 2 6;");
+        btnPricePlus1.setPrefWidth(28); btnPricePlus10.setPrefWidth(28);
+        
+        btnPricePlus1.setOnAction(e -> {
+            try {
+                double currentVal = Double.parseDouble(priceField.getText());
+                double tickSize = simulator.getTickChangeSize(currentVal);
+                priceField.setText(String.format("%.2f", currentVal + tickSize));
+            } catch (NumberFormatException ex) { priceField.setText(String.format("%.2f", currentPrice)); }
+        });
+
+        btnPricePlus10.setOnAction(e -> {
+            try {
+                double currentVal = Double.parseDouble(priceField.getText());
+                for (int i = 0; i < 10; i++) {
+                    currentVal += simulator.getTickChangeSize(currentVal);
+                }
+                priceField.setText(String.format("%.2f", currentVal));
+            } catch (NumberFormatException ex) { priceField.setText(String.format("%.2f", currentPrice)); }
+        });
+        VBox pricePlusBox = new VBox(2, btnPricePlus1, btnPricePlus10);
+
+        // 打包 ◀ [價格欄] ▶ 
+        HBox priceTickBox = new HBox(3, priceMinusBox, priceField, pricePlusBox);
+        priceTickBox.setAlignment(Pos.CENTER_LEFT);
+
+        sharesField.setPrefWidth(80);
+        sharesField.setStyle("-fx-background-color: #22272e; -fx-text-fill: #adbac7; -fx-alignment: CENTER; -fx-border-color: #444c56; -fx-border-radius: 4;");
+
+        // 建立股數【減少】的上下複合按鈕 (上: -1 股, 下: -1000 股)
+        Button btnSharesMinus1 = new Button("-1");
+        Button btnSharesMinus1000 = new Button("-1k");
+        btnSharesMinus1.setStyle("-fx-background-color: #444c56; -fx-text-fill: #adbac7; -fx-cursor: hand; -fx-font-size: 9px; -fx-font-weight: bold; -fx-padding: 2 4;");
+        btnSharesMinus1000.setStyle("-fx-background-color: #353c45; -fx-text-fill: #8b949e; -fx-cursor: hand; -fx-font-size: 9px; -fx-font-weight: bold; -fx-padding: 2 4;");
+        btnSharesMinus1.setPrefWidth(32); btnSharesMinus1000.setPrefWidth(32);
+        
+        btnSharesMinus1.setOnAction(e -> {
+            try {
+                int currentShares = Integer.parseInt(sharesField.getText().trim());
+                int newShares = currentShares - 1;
+                sharesField.setText(String.valueOf(Math.max(0, newShares))); // 🎯 低於零變回 0
+            } catch (NumberFormatException ex) { sharesField.setText("0"); }
+        });
+
+        btnSharesMinus1000.setOnAction(e -> {
+            try {
+                int currentShares = Integer.parseInt(sharesField.getText().trim());
+                int newShares = currentShares - 1000;
+                sharesField.setText(String.valueOf(Math.max(0, newShares))); // 🎯 低於零變回 0
+            } catch (NumberFormatException ex) { sharesField.setText("0"); }
+        });
+        VBox sharesMinusBox = new VBox(2, btnSharesMinus1, btnSharesMinus1000);
+
+        // 建立股數【增加】的上下複合按鈕 (上: +1 股, 下: +1000 股)
+        Button btnSharesPlus1 = new Button("+1");
+        Button btnSharesPlus1000 = new Button("+1k");
+        btnSharesPlus1.setStyle("-fx-background-color: #444c56; -fx-text-fill: #adbac7; -fx-cursor: hand; -fx-font-size: 9px; -fx-font-weight: bold; -fx-padding: 2 4;");
+        btnSharesPlus1000.setStyle("-fx-background-color: #353c45; -fx-text-fill: #8b949e; -fx-cursor: hand; -fx-font-size: 9px; -fx-font-weight: bold; -fx-padding: 2 4;");
+        btnSharesPlus1.setPrefWidth(32); btnSharesPlus1000.setPrefWidth(32);
+        
+        btnSharesPlus1.setOnAction(e -> {
+            try {
+                int currentShares = Integer.parseInt(sharesField.getText().trim());
+                int newShares = currentShares + 1;
+                sharesField.setText(String.valueOf(Math.max(0, newShares)));
+            } catch (NumberFormatException ex) { sharesField.setText("1000"); }
+        });
+
+        btnSharesPlus1000.setOnAction(e -> {
+            try {
+                int currentShares = Integer.parseInt(sharesField.getText().trim());
+                int newShares = currentShares + 1000;
+                sharesField.setText(String.valueOf(Math.max(0, newShares)));
+            } catch (NumberFormatException ex) { sharesField.setText("1000"); }
+        });
+
+        VBox sharesPlusBox = new VBox(2, btnSharesPlus1, btnSharesPlus1000);
+
+        // 將 ◀ [股數欄] ▶ 橫向打包成一組物件
+        HBox sharesTickBox = new HBox(3, sharesMinusBox, sharesField, sharesPlusBox);
+        sharesTickBox.setAlignment(Pos.CENTER_LEFT);
+
         Button buyBtn = new Button("買入");
         buyBtn.getStyleClass().addAll(Styles.SUCCESS, Styles.BUTTON_OUTLINED);
         buyBtn.setOnAction(e -> handleTrade(true));
@@ -415,7 +588,13 @@ public class MainApp extends Application {
         sellBtn.getStyleClass().addAll(Styles.DANGER, Styles.BUTTON_OUTLINED);
         sellBtn.setOnAction(e -> handleTrade(false));
 
-        tradeControlPanel.getChildren().addAll(new Label("交易股數:"), sharesField, buyBtn, sellBtn, new Separator(javafx.geometry.Orientation.VERTICAL), infoLabel);
+        tradeControlPanel.getChildren().addAll(
+            new Label("目標價格"), priceTickBox, 
+            new Label("交易股數:"), sharesTickBox, 
+            buyBtn, sellBtn, 
+            new Separator(javafx.geometry.Orientation.VERTICAL), 
+            infoLabel
+        );
         
         backtestControlBar = new HBox(15);
         backtestControlBar.setAlignment(Pos.CENTER_LEFT);
@@ -959,16 +1138,21 @@ public class MainApp extends Application {
 
         limitDownSeries = new XYChart.Series<>();
         limitDownSeries.setName("跌停價");
+
+        yesterdayCloseSeries = new XYChart.Series<>();
+        yesterdayCloseSeries.setName("昨收價");
         
         priceSeries = new XYChart.Series<>();
         priceSeries.setName("股價");
 
         chart.getData().add(limitUpSeries);
         chart.getData().add(limitDownSeries);
+        chart.getData().add(yesterdayCloseSeries);
         chart.getData().add(priceSeries);
 
         limitUpSeries.getNode().setStyle("-fx-stroke: #FF3B30; -fx-stroke-dash-array: 5 5; -fx-stroke-width: 1.5px;");
         limitDownSeries.getNode().setStyle("-fx-stroke: #34C759; -fx-stroke-dash-array: 5 5; -fx-stroke-width: 1.5px;");
+        yesterdayCloseSeries.getNode().setStyle("-fx-stroke: #8E8E93; -fx-stroke-dash-array: 5 5; -fx-stroke-width: 1.5px;");
 
         return chart;
     }
@@ -989,16 +1173,42 @@ public class MainApp extends Application {
                 return;
             }
 
-            //安全解析字串：同時相容「當前市價」與「即時市價」的文本結構
-            String priceStr = currentPriceLabel.getText()
-                    .replace("當前市價: ", "")
-                    .replace("即時市價: ", "")
-                    .trim();
-            
-            if (priceStr.contains("(")) {
-                priceStr = priceStr.split("\\(")[0].trim();
+            double price = 0.0;
+
+            // 確認限價輸入是否有填寫數字
+
+            if (priceField != null && !priceField.getText().trim().isEmpty()) {
+                try {
+                    price = Double.parseDouble(priceField.getText().trim());
+                }
+                catch (NumberFormatException e) {
+                    showWarning("請輸入正確的限價數字格式");
+                    return;
+                }
             }
-            double price = Double.parseDouble(priceStr);
+            else {
+                // 限價是空的就以市價買入
+                //安全解析字串：同時相容「當前市價」與「即時市價」的文本結構
+                String priceStr = currentPriceLabel.getText()
+                        .replace("當前市價: ", "")
+                        .replace("即時市價: ", "")
+                        .trim();
+                
+                if (priceStr.contains("(")) {
+                    priceStr = priceStr.split("\\(")[0].trim();
+                }
+                price = Double.parseDouble(priceStr);
+
+                // 自動幫玩家把抓到的市價填回輸入框，優化體驗
+                if (priceField != null) {
+                    priceField.setText(String.format("%.2f", price));
+                }
+            }
+
+            if (price <= 0) {
+                showWarning("交易價格必須大於 0！");
+                return;
+            }
 
             // 4. 動態獲取當前日期
             String date = (historyData != null && dayIndex < historyData.size()) 
@@ -1044,35 +1254,52 @@ public class MainApp extends Application {
         Label toastLabel = new Label(message);
 
         if (type.equals("BUY")) {
-            toastLabel.setStyle("-fx-background-color: #FF3B30; -fx-text-fill: white; -fx-padding: 10 20; -fx-background-radius: 20; -fx-font-size: 14px; -fx-font-weight: bold;");
+            toastLabel.setStyle("-fx-background-color: rgba(255, 59, 48, 0.95); -fx-text-fill: white; -fx-padding: 10 20; -fx-background-radius: 20; -fx-font-size: 14px; -fx-font-weight: bold;");
         }
         else if (type.equals("SELL")) {
-            toastLabel.setStyle("-fx-background-color: #34C759; -fx-text-fill: white; -fx-padding: 10 20; -fx-background-radius: 20; -fx-font-size: 14px; -fx-font-weight: bold;");
+            toastLabel.setStyle("-fx-background-color: rgba(52, 199, 89, 0.95); white; -fx-padding: 10 20; -fx-background-radius: 20; -fx-font-size: 14px; -fx-font-weight: bold;");
         }
         else {
-            toastLabel.setStyle("-fx-background-color: #8E8E93; -fx-text-fill: white; -fx-padding: 10 20; -fx-background-radius: 20; -fx-font-size: 14px;");
+            toastLabel.setStyle("-fx-background-color: rgba(23, 26, 33, 0.95); -fx-text-fill: white; -fx-padding: 10 20; -fx-background-radius: 20; -fx-font-size: 14px;");
         }
 
         VBox root = new VBox(toastLabel);
-        root.setStyle("-fx-background-color: transparent;"); // 容器本身必須完全透明
+        root.setStyle("-fx-background-color: transparent;"); // 容器本身完全透明
         root.setAlignment(Pos.CENTER);
 
         Scene scene = new Scene(root);
         scene.setFill(Color.TRANSPARENT); // 畫布也必須透明
         toastStage.setScene(scene);
 
-        // 🎯 讓通知視窗出現在螢幕正中央（偏上方的位置）
-        toastStage.setX(javafx.stage.Screen.getPrimary().getVisualBounds().getWidth() / 2 - 150);
-        toastStage.setY(120); // 距離螢幕頂端 120 像素
+        Rectangle2D visualBounds = Screen.getPrimary().getVisualBounds();
+        double windowWigth = 320;
+        double windowHeight = 60;
 
+        double startX = visualBounds.getWidth() - windowWigth - 20;
+        double startY = visualBounds.getHeight() - windowHeight - 20;
+
+        toastStage.setX(startX);
+        toastStage.setY(startY);
         toastStage.show();
 
-        FadeTransition fade = new FadeTransition(Duration.millis(500), root);
-        fade.setFromValue(1.0);
-        fade.setToValue(0.0);
-        fade.setDelay(Duration.seconds(2.0));
-        fade.setOnFinished(event -> toastStage.close());
-        fade.play();
+        root.setTranslateY(50);
+        TranslateTransition slideIn = new TranslateTransition(Duration.millis(400), root);
+        slideIn.setToY(0);
+
+        FadeTransition fadeIn = new FadeTransition(Duration.millis(300), root);
+        fadeIn.setFromValue(0.0);
+        fadeIn.setToValue(1.0);
+
+        FadeTransition fadeOut = new FadeTransition(Duration.millis(500), root);
+        fadeOut.setFromValue(1.0);
+        fadeOut.setToValue(0.0);
+        fadeOut.setDelay(Duration.seconds(3.0)); // 在畫面上停留 3 秒
+        fadeOut.setOnFinished(event -> toastStage.close()); // 播完後關閉視窗
+
+        ParallelTransition appearance = new ParallelTransition(slideIn, fadeIn);
+        appearance.play();
+        
+        appearance.setOnFinished(e -> fadeOut.play());
     }
 
     private void updateInfoLabel() {
@@ -1089,6 +1316,8 @@ public class MainApp extends Application {
         dateCol.setCellValueFactory(new PropertyValueFactory<>("date"));
         TableColumn<TradeRecord, String> timeCol = new TableColumn<>("時間");
         timeCol.setCellValueFactory(new PropertyValueFactory<>("time"));
+        TableColumn<TradeRecord, String> stockIDCol = new TableColumn<>("股票代號");
+        stockIDCol.setCellValueFactory(new PropertyValueFactory<>("stockID"));
         TableColumn<TradeRecord, String> typeCol = new TableColumn<>("類型");
         typeCol.setCellValueFactory(new PropertyValueFactory<>("type"));
         typeCol.setCellFactory(column -> new TableCell<TradeRecord, String>() {
@@ -1119,7 +1348,7 @@ public class MainApp extends Application {
         costCol.setCellValueFactory(new PropertyValueFactory<>("totalCost"));
 
         historyTable.getColumns().clear();
-        historyTable.getColumns().addAll(dateCol, timeCol, typeCol, priceCol, sharesCol, costCol);
+        historyTable.getColumns().addAll(dateCol, timeCol, stockIDCol, typeCol, priceCol, sharesCol, costCol);
         historyTable.setItems(observableRecords);
         historyTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
     }
@@ -1130,6 +1359,8 @@ public class MainApp extends Application {
         dateCol.setCellValueFactory(new PropertyValueFactory<>("date"));
         TableColumn<Order, String> timeCol = new TableColumn<>("時間");
         timeCol.setCellValueFactory(new PropertyValueFactory<>("time"));
+        TableColumn<Order, String> stockIDCol = new TableColumn<>("股票代號");
+        stockIDCol.setCellValueFactory(new PropertyValueFactory<>("stockID"));
         TableColumn<Order, Boolean> typeCol = new TableColumn<>("類型");
         typeCol.setCellValueFactory(new PropertyValueFactory<>("buy"));
         typeCol.setCellFactory(column -> new TableCell<Order, Boolean>() {
@@ -1185,7 +1416,7 @@ public class MainApp extends Application {
         });
 
         activeOrderTable.getColumns().clear();
-        activeOrderTable.getColumns().addAll(dateCol, timeCol, typeCol, priceCol, sharesCol, statusCol);
+        activeOrderTable.getColumns().addAll(dateCol, timeCol, stockIDCol, typeCol, priceCol, sharesCol, statusCol);
         activeOrderTable.setItems(observableOrders);
         activeOrderTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
     }
@@ -1231,6 +1462,7 @@ public class MainApp extends Application {
                             // 隱藏或清空回測專用的漲跌停虛線
                             if (limitUpSeries != null) limitUpSeries.getData().clear();
                             if (limitDownSeries != null) limitDownSeries.getData().clear();
+                            if (yesterdayCloseSeries != null) yesterdayCloseSeries.getData().clear();
                             refreshAssetView();
                             updateInfoLabel();
                         });
@@ -1293,6 +1525,14 @@ public class MainApp extends Application {
                 limitDownSeries.getNode().setStyle("-fx-stroke: #34C759; -fx-stroke-dash-array: 5 5; -fx-stroke-width: 1.5px;");
             }
         }
+        if (yesterdayCloseSeries != null) {
+            yesterdayCloseSeries.getData().clear();
+            yesterdayCloseSeries.getData().add(new XYChart.Data<>(0, yesterdayClose));
+            yesterdayCloseSeries.getData().add(new XYChart.Data<>(270, yesterdayClose));
+            if (yesterdayCloseSeries.getNode() != null) { //灰色虛線
+                yesterdayCloseSeries.getNode().setStyle("-fx-stroke: #8E8E93; -fx-stroke-dash-array: 5 5; -fx-stroke-width: 1.5px;");
+            }
+        }
         
         simulator.generateDayPath(today, yesterdayClose);
         
@@ -1302,7 +1542,7 @@ public class MainApp extends Application {
         if (timeline != null) timeline.stop();
 
         timeline = new Timeline(new KeyFrame(Duration.millis(300), e -> {
-            double currentPrice = simulator.getNextPrice();
+            currentPrice = simulator.getNextPrice();
             if (currentPrice != -1) {
                 int currentTime = tickCount;
                 currentTime += 9*60;
