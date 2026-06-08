@@ -79,6 +79,7 @@ public class MainApp extends Application {
     
     // 模擬核心數據
     private int tickCount = 0;
+    private int assetRefreshCounter = 0; // 節流計數器：每 10 tick 才重建一次資產頁
     private List<StockData> historyData = new ArrayList<>();
     private int dayIndex = 0;
     private double currentPrice;
@@ -643,24 +644,24 @@ public class MainApp extends Application {
             new Thread(() -> {
                 try {
                     List<?> loadedData = aiHub.loadSimulationHistory(currentStockId, null);
+                    // 先在背景執行緒完成解析，不直接碰 this.historyData
+                    java.util.List<com.stockbucks.StockData> parsedHistory = null;
                     if (loadedData != null && !loadedData.isEmpty() && loadedData.get(0) instanceof com.stockbucks.StockData) {
-                        java.util.List<com.stockbucks.StockData> tempHistory = new java.util.ArrayList<>();
+                        parsedHistory = new java.util.ArrayList<>();
                         for (Object obj : loadedData) {
                             if (obj instanceof com.stockbucks.StockData) {
-                                tempHistory.add((com.stockbucks.StockData) obj);
+                                parsedHistory.add((com.stockbucks.StockData) obj);
                             }
                         }
-                        this.historyData = tempHistory; 
                     }
 
+                    // 在背景搜尋目標日期（使用 parsedHistory，不碰共享的 this.historyData）
                     boolean dateFound = false;
                     int foundIndex = -1;
-
-                    if (this.historyData != null && !this.historyData.isEmpty()) {
-                        for (int i = 0; i < this.historyData.size(); i++) {
-                            com.stockbucks.StockData data = this.historyData.get(i);
+                    if (parsedHistory != null) {
+                        for (int i = 0; i < parsedHistory.size(); i++) {
+                            com.stockbucks.StockData data = parsedHistory.get(i);
                             if (data == null || data.getDate() == null) continue;
-
                             String cleanCsvDate = data.getDate().replace("/", "-").trim();
                             if (cleanCsvDate.equals(targetDateStr)) {
                                 foundIndex = i;
@@ -672,21 +673,25 @@ public class MainApp extends Application {
 
                     final boolean finalDateFound = dateFound;
                     final int finalIndex = foundIndex;
-                    
+                    final java.util.List<com.stockbucks.StockData> finalParsedHistory = parsedHistory;
+
                     Platform.runLater(() -> {
+                        // 所有共享狀態的寫入統一在 UI 執行緒進行，杜絕 Race Condition
+                        if (finalParsedHistory != null) {
+                            this.historyData = finalParsedHistory;
+                        }
                         if (finalDateFound) {
                             this.dayIndex = finalIndex;
-                            if (timeline != null) timeline.stop(); 
+                            if (timeline != null) timeline.stop();
 
                             com.stockbucks.StockData selectedDayData = this.historyData.get(this.dayIndex);
                             currentPriceLabel.setText(String.format("已切換至 %s (等待開盤)", targetDateStr));
-                            priceSeries.getData().clear(); 
+                            priceSeries.getData().clear();
                             tickCount = 0;
 
                             if (infoLabel != null) {
                                 infoLabel.setText(String.format("歷史模式 | 開盤預估: %.2f", selectedDayData.getOpen()));
                             }
-                            
                             refreshAssetView();
                             updateInfoLabel();
                             showNotification("AIHub 行事曆匹配成功：已跳轉至 " + targetDateStr, "INFO");
@@ -1120,7 +1125,7 @@ public class MainApp extends Application {
 
     private LineChart<Number, Number> createPriceChart(double yesterdayClose, double limitUp, double limitDown) {
         NumberAxis xAxis = new NumberAxis(0, 270, 30);
-        NumberAxis yAxis = new NumberAxis(limitDown-yesterdayClose*0.01, limitUp*0.01, (limitUp - limitDown)/10);
+        NumberAxis yAxis = new NumberAxis(limitDown-yesterdayClose*0.01, limitUp+yesterdayClose*0.01, (limitUp - limitDown)/10);
         xAxis.setLabel("時間 (Ticks)");
         xAxis.setForceZeroInRange(false);
         xAxis.setAutoRanging(false);
@@ -1422,11 +1427,27 @@ public class MainApp extends Application {
     }
 
     private void handleStartSimulation() {
-        String inputId = stockSearchField.getText().trim();
-        if (!inputId.isEmpty() && !inputId.equals(this.currentSelectedStockId)) {
-            this.currentSelectedStockId = inputId;
-            this.historyData = null; // 倒空舊股票的大表，讓時脈跑動時會去抓新股票的資料
-            this.dayIndex = 0;
+        // ── 1. 判斷是否真的換了股票 ──────────────────────────────────────────
+        // 優先取搜尋欄，但比較對象是「已確認的 currentSelectedStockId」
+        String inputId = stockSearchField != null ? stockSearchField.getText().trim() : "";
+        if (inputId.isEmpty() && marketSearchField != null) {
+            inputId = marketSearchField.getText().trim();
+        }
+        final String resolvedId = inputId.isEmpty() ? this.currentSelectedStockId : inputId;
+
+        boolean stockChanged = !resolvedId.equals(this.currentSelectedStockId);
+        if (stockChanged) {
+            this.currentSelectedStockId = resolvedId;
+            this.historyData = null; // 清空舊股票資料
+            this.dayIndex = 0;       // 換股才歸零，時空穿梭不歸零
+        }
+
+        // 同步更新兩個搜尋欄，避免後續判斷錯亂
+        if (stockSearchField != null && !stockSearchField.getText().trim().equals(resolvedId)) {
+            stockSearchField.setText(resolvedId);
+        }
+        if (marketSearchField != null && !marketSearchField.getText().trim().equals(resolvedId)) {
+            marketSearchField.setText(resolvedId);
         }
 
         // 如果定時器正在跑，先無條件關閉它，防止多個執行緒重疊衝突
@@ -1478,21 +1499,53 @@ public class MainApp extends Application {
         // ====================================================================
         // 🔵 【分流 B】歷史回測模式：原本的動態 Timeline 跑線邏輯
         // ====================================================================
-        
-        // 2. 自動檢查與加載歷史模擬資料
-        if (historyData == null || historyData.isEmpty()) {
-            try {
-                List<?> loadedData = aiHub.loadSimulationHistory(currentSelectedStockId, null);
-                if (loadedData != null && !loadedData.isEmpty() && loadedData.get(0) instanceof com.stockbucks.StockData) {
-                    this.historyData = (List<com.stockbucks.StockData>) loadedData;
-                }
-            } catch (Exception ex) {
-                showWarning("歷史資料載入失敗，無法啟動模擬！");
-                return;
-            }
+
+        // 2. 若已有歷史資料，直接進入模擬；否則非同步載入後再啟動
+        if (historyData != null && !historyData.isEmpty()) {
+            startHistorySimulation(); // 資料已就緒，直接跑
+            return;
         }
 
-        if (historyData == null || dayIndex >= historyData.size()) {
+        // 非同步載入歷史資料，避免 I/O 卡住 UI 執行緒
+        final String loadStockId = this.currentSelectedStockId;
+        final int preservedDayIndex = this.dayIndex; // 記住當前 dayIndex（時空穿梭已設好）
+        currentPriceLabel.setText("載入歷史資料中…");
+
+        new Thread(() -> {
+            try {
+                List<?> loadedData = aiHub.loadSimulationHistory(loadStockId, null);
+                Platform.runLater(() -> {
+                    // 確認換股期間使用者沒又換回別的股票
+                    if (!loadStockId.equals(this.currentSelectedStockId)) return;
+
+                    if (loadedData != null && !loadedData.isEmpty()
+                            && loadedData.get(0) instanceof com.stockbucks.StockData) {
+                        this.historyData = (List<com.stockbucks.StockData>) loadedData;
+                        // 還原 dayIndex：若超出範圍則歸零
+                        this.dayIndex = (preservedDayIndex < this.historyData.size()) ? preservedDayIndex : 0;
+                    }
+
+                    if (this.historyData == null || this.historyData.isEmpty()) {
+                        showWarning("歷史資料載入失敗，無法啟動模擬！");
+                        currentPriceLabel.setText("當前市價: --");
+                        return;
+                    }
+
+                    startHistorySimulation(); // 資料就緒，正式啟動
+                });
+            } catch (Exception ex) {
+                Platform.runLater(() -> {
+                    showWarning("歷史資料載入失敗，無法啟動模擬！");
+                    currentPriceLabel.setText("當前市價: --");
+                });
+            }
+        }).start();
+    }
+
+    /** 抽出的純模擬啟動邏輯，只在 historyData 已確認就緒後呼叫 */
+    @SuppressWarnings("unchecked")
+    private void startHistorySimulation() {
+        if (historyData == null || historyData.isEmpty() || dayIndex >= historyData.size()) {
             showWarning("暫無可用的回測歷史數據！");
             return;
         }
@@ -1562,7 +1615,12 @@ public class MainApp extends Application {
                 }
 
                 tradingEngine.onPriceUpdate(this.currentSelectedStockId, currentPrice, tickCount++);
-                refreshAssetView();
+                // 節流：每 10 個 tick 才重建資產頁 UI，避免每秒鐘多次重建導致卡頓
+                assetRefreshCounter++;
+                if (assetRefreshCounter >= 10) {
+                    assetRefreshCounter = 0;
+                    refreshAssetView();
+                }
 
                 List <TradeRecord> records = tradingEngine.getDailyRecords();
                 observableRecords.clear();
@@ -1608,6 +1666,10 @@ public class MainApp extends Application {
                 timeline.stop();
                 dayIndex++;
                 tickCount = 0;
+                // 自動進入次日：若仍有歷史資料則無縫啟動下一天的模擬
+                if (historyData != null && dayIndex < historyData.size()) {
+                    Platform.runLater(() -> handleStartSimulation());
+                }
             }
         }));
         timeline.setCycleCount(Animation.INDEFINITE);
@@ -1626,9 +1688,14 @@ public class MainApp extends Application {
         marketTabPane.getSelectionModel().clearSelection();
         marketTabPane.getTabs().clear();
 
-        final String currentSimDate = (this.historyData != null && this.dayIndex < this.historyData.size()) 
-            ? this.historyData.get(this.dayIndex).getDate().replace("/", "-").trim() 
-            : java.time.LocalDate.now().toString();
+        // 取得模擬日期：優先用 historyData，否則用 dayIndex=0 第一筆，避免用「現實今天」查不到資料
+        final String currentSimDate;
+        if (this.historyData != null && !this.historyData.isEmpty() && this.dayIndex < this.historyData.size()) {
+            currentSimDate = this.historyData.get(this.dayIndex).getDate().replace("/", "-").trim();
+        } else {
+            // historyData 還沒載入時，暫不渲染字卡（等 historyData 就緒後會再次 refresh）
+            currentSimDate = null;
+        }
 
         // 1. 根據資料結構中的每一個 Key，建立對應的 Tab
         for (String tabName : watchlistData.keySet()) {
@@ -1744,7 +1811,10 @@ public class MainApp extends Application {
                                 }
                             }
                         } else {
-                            //歷史回測模式
+                            //歷史回測模式：若 currentSimDate 尚未確定（historyData 未載入），隱藏字卡
+                            if (currentSimDate == null) {
+                                isCompanyExistInThisEra = false;
+                            } else {
                             List<?> hist = aiHub.loadSimulationHistory(targetStockId, null);
                             if (hist != null && !hist.isEmpty()) {
                                 int targetIndex = -1;
@@ -1804,6 +1874,7 @@ public class MainApp extends Application {
                             } else {
                                 isCompanyExistInThisEra = false; 
                             }
+                            } // end if (currentSimDate != null)
                         }
 
                         // 傳遞給 UI 執行緒刷新
