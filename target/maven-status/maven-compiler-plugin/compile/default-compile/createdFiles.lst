@@ -1,11 +1,17 @@
 com\stockbucks\User.class
+com\stockbucks\api\debug\ApiDebugDashboard$DailyRow.class
+com\stockbucks\api\debug\ApiDebugDashboard$HistorySourceRow.class
+com\stockbucks\api\debug\ApiDebugDashboard$5.class
 com\stockbucks\StockHoldings.class
 com\stockbucks\SettlementManager.class
+com\stockbucks\api\debug\ApiDebugDashboard$FileStatusRow.class
 com\stockbucks\StockData.class
+com\stockbucks\api\debug\ApiDebugDashboard$FileFunctionRow.class
 com\stockbucks\gui\MainApp$1.class
 com\stockbucks\PriceSimulator.class
 com\stockbucks\TradingEngine.class
 com\stockbucks\TradeRecord.class
+com\stockbucks\gui\WelcomeUI$2.class
 com\stockbucks\gui\MainApp.class
 com\stockbucks\CsvLoading.class
 com\stockbucks\gui\WelcomeUI.class
@@ -17,4 +23,7 @@ com\stockbucks\gui\MainController.class
 com\stockbucks\SaveData.class
 com\stockbucks\App.class
 com\stockbucks\StockHoldings$HoldingsList.class
+com\stockbucks\api\debug\ApiDebugDashboard$HistoryResult.class
+com\stockbucks\api\debug\ApiDebugDashboard$IntradayRow.class
 com\stockbucks\gui\MainApp$2.class
+com\stockbucks\api\debug\ApiDebugDashboard$4.class

@@ -1,7 +1,7 @@
 package com.stockbucks.api.debug;
 
+import com.stockbucks.StockData;
 import com.stockbucks.api.AIHub;
-import com.stockbucks.api.ai.ApiModelClient;
 import com.stockbucks.api.config.EnvironmentConfig;
 import com.stockbucks.api.stock.BrokerAccountSnapshot;
 import com.stockbucks.api.stock.BrokerPosition;
@@ -11,54 +11,76 @@ import com.stockbucks.api.stock.StockIntradayAttempt;
 import com.stockbucks.api.stock.StockQuote;
 import com.stockbucks.api.stock.StockQuoteAttempt;
 import javafx.application.Application;
-import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
-import javafx.scene.control.SplitPane;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.cell.PropertyValueFactory;
+import javafx.scene.paint.Color;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 /**
- * API debug 用的臨時測試介面。
- *
- * 這個畫面只放在 api/debug，不接同學正式 UI。
- * 用途是快速檢查股票即時報價、資料來源 fallback、API Key 狀態與 AI 問答。
+ * API 範圍的臨時診斷介面。
+ * 只檢查 API、爬蟲、AI、環境變數與資料對接，不接正式交易 UI。
  */
 public class ApiDebugDashboard extends Application {
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final List<String> AI_PROVIDERS = List.of(
+            "openai", "anthropic", "gemini", "openrouter", "openai-compatible", "ollama"
+    );
 
     private final AIHub hub = new AIHub();
     private final ObservableList<QuoteRow> quoteRows = FXCollections.observableArrayList();
+    private final ObservableList<IntradayRow> intradayRows = FXCollections.observableArrayList();
+    private final ObservableList<HistorySourceRow> historySourceRows = FXCollections.observableArrayList();
+    private final ObservableList<DailyRow> dailyRows = FXCollections.observableArrayList();
+    private final ObservableList<FileFunctionRow> fileFunctionRows = FXCollections.observableArrayList();
+    private final ObservableList<FileStatusRow> fileStatusRows = FXCollections.observableArrayList();
 
-    private TextField symbolsField;
-    private TextArea stockStatusArea;
-    private TextArea aiStatusArea;
-    private TextArea fullTestArea;
-    private TextArea aiPromptArea;
-    private TextArea aiAnswerArea;
-    private Button refreshQuotesButton;
-    private Button fullTestButton;
-    private Button askAiButton;
+    private TextField quoteSymbolsField;
+    private TextField intradaySymbolField;
+    private TextField intradayIntervalField;
+    private TextField intradayFromDateField;
+    private TextField intradayToDateField;
+    private TextField intradayLimitField;
+    private Canvas intradayChartCanvas;
+    private Label intradayChartLabel;
+    private TextField historySymbolField;
+    private TextField historyFromDateField;
+    private TextField historyToDateField;
+    private TextField aiPromptField;
+    private TextArea overviewArea;
+    private TextArea environmentArea;
+    private TextArea aiArea;
+    private TextArea storageArea;
+    private TextArea brokerArea;
 
     public static void main(String[] args) {
         launch(args);
@@ -67,805 +89,1110 @@ public class ApiDebugDashboard extends Application {
     @Override
     public void start(Stage stage) {
         stage.setTitle("StockBucks API Debug Dashboard");
-        stage.setScene(new Scene(createRoot(), 1180, 720));
+        stage.setScene(new Scene(createRoot(), 1260, 780));
         stage.show();
 
-        refreshStatus();
+        refreshOverview();
         refreshQuotes();
+        refreshIntraday();
+        refreshHistory();
+        refreshEnvironment();
+        refreshAiStatus();
+        refreshStorageAndBroker();
+        refreshFileFunctions();
+        refreshDownloadedFiles();
     }
 
     private BorderPane createRoot() {
         BorderPane root = new BorderPane();
         root.setPadding(new Insets(14));
-        root.setStyle("-fx-background-color: #161b22; -fx-text-fill: white;");
+        root.setStyle("-fx-background-color: #161b22;");
 
-        Label title = new Label("StockBucks API 測試介面");
-        title.setStyle("-fx-text-fill: white; -fx-font-size: 22px; -fx-font-weight: bold;");
-        Label subtitle = new Label("臨時檢查股票即時資料、fallback 狀態與 AI API，不接正式 UI。");
-        subtitle.setStyle("-fx-text-fill: #8b949e;");
+        Label title = new Label("StockBucks API 診斷介面");
+        title.setStyle("-fx-text-fill: white; -fx-font-size: 24px; -fx-font-weight: bold;");
+        Label subtitle = new Label("依照檔案功能檢視 API、股票資料、盤中 K 線、AI、環境變數與對接狀態。");
+        subtitle.setStyle("-fx-text-fill: #9aa4b2;");
         VBox header = new VBox(4, title, subtitle);
         header.setPadding(new Insets(0, 0, 12, 0));
-        root.setTop(header);
 
-        SplitPane splitPane = new SplitPane(createStockPane(), createAiPane());
-        splitPane.setDividerPositions(0.62);
-        root.setCenter(splitPane);
+        TabPane tabs = new TabPane();
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        tabs.getTabs().addAll(
+                tab("總覽", createOverviewPane()),
+                tab("檔案功能", createFileFunctionPane()),
+                tab("抓取檔案", createDownloadedFilePane()),
+                tab("報價來源", createQuotePane()),
+                tab("盤中 K 線", createIntradayPane()),
+                tab("歷史資料", createHistoryPane()),
+                tab("環境變數", createEnvironmentPane()),
+                tab("AI 狀態", createAiPane()),
+                tab("儲存 / 券商", createStorageBrokerPane())
+        );
+
+        root.setTop(header);
+        root.setCenter(tabs);
         return root;
     }
 
-    private VBox createStockPane() {
-        symbolsField = new TextField("2330,0050,0052,00881");
-        symbolsField.setPromptText("輸入股票代號，用逗號分隔，例如 2330,0050,0052");
-        HBox.setHgrow(symbolsField, Priority.ALWAYS);
+    private Tab tab(String title, VBox content) {
+        Tab tab = new Tab(title);
+        tab.setContent(content);
+        return tab;
+    }
 
-        refreshQuotesButton = new Button("更新報價");
-        refreshQuotesButton.setOnAction(event -> refreshQuotes());
+    private VBox createOverviewPane() {
+        Button refresh = new Button("重新整理總覽");
+        refresh.setOnAction(event -> refreshOverview());
+        overviewArea = createReadOnlyArea("總覽");
+        VBox.setVgrow(overviewArea, Priority.ALWAYS);
+        return pane(refresh, overviewArea);
+    }
 
-        Button refreshStatusButton = new Button("更新狀態");
-        refreshStatusButton.setOnAction(event -> refreshStatus());
+    private VBox createFileFunctionPane() {
+        TableView<FileFunctionRow> table = table(fileFunctionRows);
+        addColumn(table, "檔案", "file", 240);
+        addColumn(table, "負責功能", "feature", 320);
+        addColumn(table, "目前檢視重點", "diagnostic", 360);
+        addColumn(table, "狀態", "status", 160);
 
-        HBox toolbar = new HBox(8, new Label("股票："), symbolsField, refreshQuotesButton, refreshStatusButton);
-        toolbar.setAlignment(Pos.CENTER_LEFT);
+        Button refresh = new Button("重新整理檔案功能");
+        refresh.setOnAction(event -> refreshFileFunctions());
+        VBox.setVgrow(table, Priority.ALWAYS);
+        return pane(refresh, table);
+    }
 
-        TableView<QuoteRow> table = createQuoteTable();
+    private VBox createDownloadedFilePane() {
+        TableView<FileStatusRow> table = table(fileStatusRows);
+        addColumn(table, "檔案", "path", 360);
+        addColumn(table, "用途", "role", 240);
+        addColumn(table, "狀態", "status", 100);
+        addColumn(table, "大小", "size", 100);
+        addColumn(table, "最後更新", "lastModified", 170);
+        addColumn(table, "備註", "note", 280);
+
+        Button refresh = new Button("重新掃描抓取檔案");
+        refresh.setOnAction(event -> refreshDownloadedFiles());
+        VBox.setVgrow(table, Priority.ALWAYS);
+        return pane(refresh, table);
+    }
+
+
+    private VBox createQuotePane() {
+        quoteSymbolsField = new TextField("2330,0050,0052,00881");
+        quoteSymbolsField.setPromptText("股票代號，例如 2330,0050,6770,7660");
+        HBox.setHgrow(quoteSymbolsField, Priority.ALWAYS);
+
+        Button refresh = new Button("測試報價來源");
+        refresh.setOnAction(event -> refreshQuotes());
+        HBox toolbar = toolbar(new Label("股票："), quoteSymbolsField, refresh);
+
+        TableView<QuoteRow> table = table(quoteRows);
+        addColumn(table, "股票", "stockId", 80);
+        addColumn(table, "來源", "provider", 130);
+        addColumn(table, "狀態", "status", 90);
+        addColumn(table, "粒度", "granularity", 110);
+        addColumn(table, "名稱", "stockName", 120);
+        addColumn(table, "最新價", "lastPrice", 90);
+        addColumn(table, "開盤", "openPrice", 90);
+        addColumn(table, "最高", "highPrice", 90);
+        addColumn(table, "最低", "lowPrice", 90);
+        addColumn(table, "成交量", "volume", 100);
+        addColumn(table, "訊息", "message", 260);
+        VBox.setVgrow(table, Priority.ALWAYS);
+        return pane(toolbar, table);
+    }
+
+    private VBox createIntradayPane() {
+        intradaySymbolField = new TextField("2330");
+        intradayIntervalField = new TextField("1m");
+        intradayFromDateField = new TextField(LocalDate.now().minusDays(7).toString());
+        intradayToDateField = new TextField(LocalDate.now().toString());
+        intradayLimitField = new TextField("300");
+        intradaySymbolField.setPromptText("股票代號");
+        intradayIntervalField.setPromptText("1m / 5m / 1h");
+        intradayFromDateField.setPromptText("yyyy-MM-dd");
+        intradayToDateField.setPromptText("yyyy-MM-dd");
+        intradayLimitField.setPromptText("最多筆數");
+
+        Button refresh = new Button("測試盤中 K 線");
+        refresh.setOnAction(event -> refreshIntraday());
+        HBox toolbar = toolbar(
+                new Label("股票："), intradaySymbolField,
+                new Label("時間單位："), intradayIntervalField,
+                new Label("起："), intradayFromDateField,
+                new Label("迄："), intradayToDateField,
+                new Label("最多："), intradayLimitField,
+                refresh
+        );
+
+        TableView<IntradayRow> table = table(intradayRows);
+        addColumn(table, "股票", "stockId", 80);
+        addColumn(table, "來源", "provider", 120);
+        addColumn(table, "狀態", "status", 90);
+        addColumn(table, "粒度", "granularity", 90);
+        addColumn(table, "時間", "time", 170);
+        addColumn(table, "開", "open", 80);
+        addColumn(table, "高", "high", 80);
+        addColumn(table, "低", "low", 80);
+        addColumn(table, "收", "close", 80);
+        addColumn(table, "量", "volume", 100);
+        addColumn(table, "訊息", "message", 280);
         VBox.setVgrow(table, Priority.ALWAYS);
 
-        stockStatusArea = createReadOnlyArea("股票資料來源狀態");
-        stockStatusArea.setPrefRowCount(7);
+        intradayChartLabel = sectionTitle("K 線圖：等待資料");
+        intradayChartCanvas = new Canvas(1120, 260);
+        intradayChartCanvas.widthProperty().addListener((obs, oldValue, newValue) -> refreshIntraday());
+        VBox chartBox = new VBox(6, intradayChartLabel, intradayChartCanvas);
+        chartBox.setStyle("-fx-background-color: #0d1117; -fx-padding: 10;");
+        return pane(toolbar, chartBox, table);
+    }
 
-        VBox pane = new VBox(10, sectionTitle("股票即時資料"), toolbar, table, labeledBox("來源狀態", stockStatusArea));
-        pane.setPadding(new Insets(12));
-        return pane;
+    private VBox createHistoryPane() {
+        historySymbolField = new TextField("2330");
+        historyFromDateField = new TextField(LocalDate.now().minusDays(30).toString());
+        historyToDateField = new TextField(LocalDate.now().toString());
+        historySymbolField.setPromptText("股票代號");
+        historyFromDateField.setPromptText("yyyy-MM-dd");
+        historyToDateField.setPromptText("yyyy-MM-dd");
+        Button refresh = new Button("測試歷史資料");
+        refresh.setOnAction(event -> refreshHistory());
+        HBox toolbar = toolbar(
+                new Label("股票："), historySymbolField,
+                new Label("起："), historyFromDateField,
+                new Label("迄："), historyToDateField,
+                refresh
+        );
+
+        TableView<HistorySourceRow> sourceTable = table(historySourceRows);
+        addColumn(sourceTable, "來源", "provider", 130);
+        addColumn(sourceTable, "狀態", "status", 90);
+        addColumn(sourceTable, "粒度", "granularity", 90);
+        addColumn(sourceTable, "筆數", "count", 80);
+        addColumn(sourceTable, "第一筆", "firstDate", 110);
+        addColumn(sourceTable, "最後一筆", "lastDate", 110);
+        addColumn(sourceTable, "訊息", "message", 300);
+        sourceTable.setPrefHeight(210);
+
+        TableView<DailyRow> dataTable = table(dailyRows);
+        addColumn(dataTable, "日期", "date", 110);
+        addColumn(dataTable, "股票", "stockId", 80);
+        addColumn(dataTable, "名稱", "stockName", 120);
+        addColumn(dataTable, "開", "open", 80);
+        addColumn(dataTable, "高", "high", 80);
+        addColumn(dataTable, "低", "low", 80);
+        addColumn(dataTable, "收", "close", 80);
+        addColumn(dataTable, "量", "volume", 110);
+        VBox.setVgrow(dataTable, Priority.ALWAYS);
+        return pane(toolbar, sectionTitle("來源診斷"), sourceTable, sectionTitle("合併後日資料前 80 筆"), dataTable);
+    }
+
+    private VBox createEnvironmentPane() {
+        Button refresh = new Button("重新檢查環境變數");
+        refresh.setOnAction(event -> refreshEnvironment());
+        environmentArea = createReadOnlyArea("環境變數狀態");
+        VBox.setVgrow(environmentArea, Priority.ALWAYS);
+        return pane(refresh, environmentArea);
     }
 
     private VBox createAiPane() {
-        aiStatusArea = createReadOnlyArea("AI 狀態");
-        fullTestArea = createReadOnlyArea("全方位 API 測試結果");
-        fullTestArea.setPrefRowCount(12);
+        aiPromptField = new TextField("請用繁體中文簡短說明目前股票資料來源狀態。");
+        HBox.setHgrow(aiPromptField, Priority.ALWAYS);
+        Button refresh = new Button("重新檢查 AI");
+        refresh.setOnAction(event -> refreshAiStatus());
+        Button ask = new Button("送出測試問題");
+        ask.setOnAction(event -> askAi());
 
-        fullTestButton = new Button("全方位 API 測試");
-        fullTestButton.setOnAction(event -> runFullApiTest());
-
-        aiPromptArea = new TextArea("請用繁體中文摘要目前台積電報價資料，並提醒資料來源可能有延遲。");
-        aiPromptArea.setWrapText(true);
-        aiPromptArea.setPrefRowCount(5);
-
-        askAiButton = new Button("送出 AI 測試");
-        askAiButton.setOnAction(event -> askAi());
-
-        aiAnswerArea = createReadOnlyArea("AI 回覆");
-        VBox.setVgrow(aiAnswerArea, Priority.ALWAYS);
-
-        VBox pane = new VBox(
-                10,
-                sectionTitle("AI API 測試"),
-                labeledBox("AI 設定 / 缺少 Key", aiStatusArea),
-                fullTestButton,
-                labeledBox("全方位測試", fullTestArea),
-                labeledBox("測試問題", aiPromptArea),
-                askAiButton,
-                labeledBox("回覆", aiAnswerArea)
-        );
-        pane.setPadding(new Insets(12));
-        return pane;
+        aiArea = createReadOnlyArea("AI 狀態與回覆");
+        VBox.setVgrow(aiArea, Priority.ALWAYS);
+        return pane(toolbar(new Label("問題："), aiPromptField, ask, refresh), aiArea);
     }
 
-    private TableView<QuoteRow> createQuoteTable() {
-        TableView<QuoteRow> table = new TableView<>(quoteRows);
-        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+    private VBox createStorageBrokerPane() {
+        Button refresh = new Button("重新檢查儲存與券商");
+        refresh.setOnAction(event -> refreshStorageAndBroker());
+        storageArea = createReadOnlyArea("本地儲存狀態");
+        brokerArea = createReadOnlyArea("券商狀態");
+        VBox.setVgrow(storageArea, Priority.ALWAYS);
+        VBox.setVgrow(brokerArea, Priority.ALWAYS);
+        return pane(refresh, sectionTitle("本地儲存"), storageArea, sectionTitle("券商 API"), brokerArea);
+    }
 
-        TableColumn<QuoteRow, String> stockId = new TableColumn<>("股票代號");
-        stockId.setCellValueFactory(new PropertyValueFactory<>("stockId"));
+    private void refreshOverview() {
+        runTextTask(overviewArea, "總覽檢查中...", () -> {
+            StringBuilder text = new StringBuilder();
+            text.append("== 簡易診斷 ==\n");
+            text.append("AI：").append(hub.getAiConfigurationStatus()).append('\n');
+            text.append("缺少 AI Key：").append(blankAsNone(hub.getMissingApiKeyName())).append('\n');
+            text.append("券商：").append(hub.getBrokerStatus()).append('\n');
+            text.append("股票來源：").append(providerSummary()).append('\n');
+            text.append("上市股票清單：").append(safeCount(() -> hub.fetchAllListedStocks().size())).append(" 筆\n");
+            text.append("全市場日資料：").append(safeCount(() -> hub.fetchAllStocksDailyMarket().size())).append(" 筆\n");
+            text.append("本地市場資料庫：").append(hub.getMarketDatabasePath().isBlank() ? "未啟用正式儲存" : hub.getMarketDatabasePath()).append('\n');
+            text.append('\n');
+            text.append("== 建議先看 ==\n");
+            text.append("1. 報價來源：確認每檔股票實際走哪個 provider。\n");
+            text.append("2. 盤中 K 線：確認是否抓到最小時間單位資料。\n");
+            text.append("3. 環境變數：確認缺少哪些 Key 或 URL。\n");
+            text.append("4. 檔案功能：確認同學要從哪個 API 方法對接。\n");
+            return text.toString();
+        });
+    }
 
-        TableColumn<QuoteRow, String> provider = new TableColumn<>("來源");
-        provider.setCellValueFactory(new PropertyValueFactory<>("provider"));
+    private void refreshFileFunctions() {
+        fileFunctionRows.setAll(List.of(
+                new FileFunctionRow("AIHub.java", "統一入口，給同學 UI 呼叫", "報價、歷史、盤中 K、AI、券商都從這裡轉接", "可對接"),
+                new FileFunctionRow("MarketDataService.java", "股票資料 fallback 與合併", "依來源排序選最細資料，歷史資料做互補合併", "核心"),
+                new FileFunctionRow("WebStockScraperClient.java", "公開網頁與 Yahoo chart 爬蟲", "即時報價與盤中 K 線的主要來源", "需常測"),
+                new FileFunctionRow("TwseHistoricalDataClient.java", "TWSE 官方資料", "歷史與全市場資料較完整，但粒度偏日資料", "備援主力"),
+                new FileFunctionRow("TpexStockDataClient.java", "TPEx 上櫃/興櫃資料", "補 TWSE 沒有的股票或市場", "互補"),
+                new FileFunctionRow("FugleStockDataClient.java", "Fugle API", "有 Key 時可補即時與歷史資料", keyStatus("FUGLE_API_KEY")),
+                new FileFunctionRow("FinMindStockDataClient.java", "FinMind API", "有 Token 時補歷史資料", keyStatus("FINMIND_TOKEN")),
+                new FileFunctionRow("BrokerHttpStockDataClient.java", "券商帳戶與券商行情", "需要券商 URL、帳密或 token", brokerSimpleStatus()),
+                new FileFunctionRow("ApiModelClient.java", "多 AI provider 呼叫", "OpenAI、Anthropic、Gemini、OpenRouter、Ollama 等", "可測"),
+                new FileFunctionRow("EnvironmentConfig.java", "讀取環境變數與 env 檔", "避免把 Key 寫死在程式碼", "可用"),
+                new FileFunctionRow("ApiDebugDashboard.java", "目前這個診斷介面", "只做 API 範圍檢查，不接正式 UI", "已整理")
+        ));
+    }
 
-        TableColumn<QuoteRow, String> status = new TableColumn<>("狀態");
-        status.setCellValueFactory(new PropertyValueFactory<>("status"));
+    private void refreshDownloadedFiles() {
+        Task<List<FileStatusRow>> task = new Task<>() {
+            @Override
+            protected List<FileStatusRow> call() {
+                List<FileStatusRow> rows = new ArrayList<>();
+                rows.add(fileStatus(Path.of("data", "TestDataTSMC.csv"), "本地 CSV 備援", "同學舊資料與 local fallback 來源"));
+                rows.add(fileStatus(Path.of("stockbucks.local.env"), "本機私有環境檔", "可放真 Key，已加入 git ignore"));
+                rows.add(fileStatus(Path.of("stockbucks.env"), "共享環境檔", "若存在，會被 EnvironmentConfig 讀取"));
+                rows.add(fileStatus(Path.of(".env"), "通用環境檔", "若存在，優先於 stockbucks.local.env 讀取"));
+                rows.add(fileStatus(Path.of("src", "main", "java", "com", "stockbucks", "api", "config", "stockbucks.env.example"), "環境範本", "給其他電腦照著建立自己的 env"));
 
-        TableColumn<QuoteRow, String> name = new TableColumn<>("名稱");
-        name.setCellValueFactory(new PropertyValueFactory<>("stockName"));
-
-        TableColumn<QuoteRow, String> price = new TableColumn<>("最新價");
-        price.setCellValueFactory(new PropertyValueFactory<>("lastPrice"));
-
-        TableColumn<QuoteRow, String> open = new TableColumn<>("開盤");
-        open.setCellValueFactory(new PropertyValueFactory<>("openPrice"));
-
-        TableColumn<QuoteRow, String> high = new TableColumn<>("最高");
-        high.setCellValueFactory(new PropertyValueFactory<>("highPrice"));
-
-        TableColumn<QuoteRow, String> low = new TableColumn<>("最低");
-        low.setCellValueFactory(new PropertyValueFactory<>("lowPrice"));
-
-        TableColumn<QuoteRow, String> volume = new TableColumn<>("成交量");
-        volume.setCellValueFactory(new PropertyValueFactory<>("volume"));
-
-        TableColumn<QuoteRow, String> fetchedAt = new TableColumn<>("抓取時間");
-        fetchedAt.setCellValueFactory(new PropertyValueFactory<>("fetchedAt"));
-
-        TableColumn<QuoteRow, String> message = new TableColumn<>("訊息");
-        message.setCellValueFactory(new PropertyValueFactory<>("message"));
-
-        table.getColumns().addAll(stockId, provider, status, name, price, open, high, low, volume, fetchedAt, message);
-        return table;
+                rows.addAll(scanFolder(Path.of("data"), "資料目錄"));
+                rows.addAll(scanFolder(Path.of("data", "api_cache"), "API 快取目錄"));
+                rows.addAll(scanFolder(Path.of("logs"), "執行紀錄目錄"));
+                return rows;
+            }
+        };
+        task.setOnSucceeded(event -> fileStatusRows.setAll(task.getValue()));
+        task.setOnFailed(event -> fileStatusRows.setAll(List.of(new FileStatusRow("", "", "失敗", "", "", message(task.getException())))));
+        new Thread(task, "stockbucks-debug-files").start();
     }
 
     private void refreshQuotes() {
-        List<String> symbols = parseSymbols(symbolsField.getText());
-        if (symbols.isEmpty()) {
-            return;
-        }
-
-        refreshQuotesButton.setDisable(true);
+        List<String> symbols = parseSymbols(quoteSymbolsField == null ? "2330,0050,0052,00881" : quoteSymbolsField.getText());
         Task<List<QuoteRow>> task = new Task<>() {
             @Override
             protected List<QuoteRow> call() {
                 List<QuoteRow> rows = new ArrayList<>();
                 for (String symbol : symbols) {
-                    rows.addAll(fetchQuoteRows(symbol));
+                    for (StockQuoteAttempt attempt : hub.fetchStockQuoteAttempts(symbol)) {
+                        rows.add(toQuoteRow(attempt));
+                    }
                 }
                 return rows;
             }
         };
-        task.setOnSucceeded(event -> {
-            quoteRows.setAll(task.getValue());
-            refreshQuotesButton.setDisable(false);
-        });
-        task.setOnFailed(event -> {
-            quoteRows.setAll(List.of(new QuoteRow("", "", "failed", "更新失敗", "", "", "", "", "", "", displayMessage(task.getException().getMessage()))));
-            refreshQuotesButton.setDisable(false);
-        });
-        new Thread(task, "stockbucks-api-debug-quotes").start();
+        task.setOnSucceeded(event -> quoteRows.setAll(task.getValue()));
+        task.setOnFailed(event -> quoteRows.setAll(List.of(new QuoteRow("", "", "失敗", "", "", "", "", "", "", "", message(task.getException())))));
+        new Thread(task, "stockbucks-debug-quotes").start();
     }
 
-    private List<QuoteRow> fetchQuoteRows(String symbol) {
-        try {
-            List<StockQuoteAttempt> attempts = hub.fetchStockQuoteAttempts(symbol);
-            if (attempts.isEmpty()) {
-                return List.of(new QuoteRow(symbol, "", "no data", "無資料", "", "", "", "", "", "", "沒有任何資料來源可嘗試"));
-            }
-            List<QuoteRow> rows = new ArrayList<>();
-            for (StockQuoteAttempt attempt : attempts) {
-                rows.add(toQuoteRow(attempt));
-            }
-            return rows;
-        } catch (RuntimeException ex) {
-            return List.of(new QuoteRow(symbol, "", "failed", "抓取失敗", "", "", "", "", "", "", displayMessage(ex.getMessage())));
+    private void refreshIntraday() {
+        String symbol = cleanStockId(intradaySymbolField == null ? "2330" : intradaySymbolField.getText());
+        String interval = intradayIntervalField == null ? "1m" : intradayIntervalField.getText().trim();
+        if (interval.isBlank()) {
+            interval = "1m";
         }
+        LocalDate fromDate = parseDate(intradayFromDateField == null ? "" : intradayFromDateField.getText(), LocalDate.now().minusDays(7));
+        LocalDate toDate = parseDate(intradayToDateField == null ? "" : intradayToDateField.getText(), LocalDate.now());
+        int limit = parsePositiveInt(intradayLimitField == null ? "" : intradayLimitField.getText(), 300);
+        String finalInterval = interval;
+        Task<IntradayResult> task = new Task<>() {
+            @Override
+            protected IntradayResult call() {
+                List<IntradayRow> rows = new ArrayList<>();
+                List<IntradayBar> chartBars = new ArrayList<>();
+                for (StockIntradayAttempt attempt : hub.fetchStockIntradayAttempts(symbol, finalInterval)) {
+                    List<IntradayBar> filteredBars = attempt.getBars()
+                            .stream()
+                            .filter(bar -> isWithinDateRange(bar, fromDate, toDate))
+                            .toList();
+                    if (filteredBars.isEmpty()) {
+                        rows.add(new IntradayRow(symbol, attempt.getProviderName(), localizeStatus(attempt.getStatus()),
+                                attempt.getDataGranularity(), "", "", "", "", "", "",
+                                rangeMessage(attempt.getBarCount(), 0, fromDate, toDate, attempt.getMessage())));
+                    } else {
+                        int start = Math.max(0, filteredBars.size() - limit);
+                        for (IntradayBar bar : filteredBars.subList(start, filteredBars.size())) {
+                            rows.add(toIntradayRow(attempt, bar));
+                        }
+                        if (chartBars.isEmpty() && "success".equals(attempt.getStatus())) {
+                            chartBars.addAll(filteredBars.subList(start, filteredBars.size()));
+                        }
+                    }
+                }
+                return new IntradayResult(rows, chartBars, fromDate, toDate, finalInterval);
+            }
+        };
+        task.setOnSucceeded(event -> {
+            intradayRows.setAll(task.getValue().rows());
+            drawIntradayChart(task.getValue().bars(), task.getValue().fromDate(), task.getValue().toDate(), task.getValue().interval());
+        });
+        task.setOnFailed(event -> {
+            intradayRows.setAll(List.of(new IntradayRow(symbol, "", "失敗", "", "", "", "", "", "", "", message(task.getException()))));
+            drawIntradayChart(List.of(), fromDate, toDate, finalInterval);
+        });
+        new Thread(task, "stockbucks-debug-intraday").start();
+    }
+
+    private void refreshHistory() {
+        String symbol = cleanStockId(historySymbolField == null ? "2330" : historySymbolField.getText());
+        LocalDate toDate = parseDate(historyToDateField == null ? "" : historyToDateField.getText(), LocalDate.now());
+        LocalDate fromDate = parseDate(historyFromDateField == null ? "" : historyFromDateField.getText(), toDate.minusDays(30));
+        Task<HistoryResult> task = new Task<>() {
+            @Override
+            protected HistoryResult call() {
+                List<HistorySourceRow> sources = new ArrayList<>();
+                for (StockHistoryAttempt attempt : hub.fetchStockHistoryAttempts(symbol, fromDate, toDate)) {
+                    sources.add(new HistorySourceRow(
+                            attempt.getProviderName(),
+                            localizeStatus(attempt.getStatus()),
+                            attempt.getDataGranularity(),
+                            String.valueOf(attempt.getRowCount()),
+                            attempt.getFirstDate(),
+                            attempt.getLastDate(),
+                            message(attempt.getMessage())
+                    ));
+                }
+
+                List<DailyRow> rows = hub.fetchStockHistory(symbol, fromDate, toDate)
+                        .stream()
+                        .limit(80)
+                        .map(this::toDailyRow)
+                        .toList();
+                return new HistoryResult(sources, rows);
+            }
+
+            private DailyRow toDailyRow(StockData data) {
+                return new DailyRow(
+                        data.getDate(),
+                        data.getStockID(),
+                        data.getStockName(),
+                        formatDouble(data.getOpen()),
+                        formatDouble(data.getHigh()),
+                        formatDouble(data.getLow()),
+                        formatDouble(data.getClose()),
+                        String.valueOf(data.getVolume())
+                );
+            }
+        };
+        task.setOnSucceeded(event -> {
+            historySourceRows.setAll(task.getValue().sources());
+            dailyRows.setAll(task.getValue().dailyRows());
+        });
+        task.setOnFailed(event -> {
+            historySourceRows.setAll(List.of(new HistorySourceRow("", "失敗", "", "", "", "", message(task.getException()))));
+            dailyRows.clear();
+        });
+        new Thread(task, "stockbucks-debug-history").start();
+    }
+
+    private void refreshEnvironment() {
+        runTextTask(environmentArea, "環境變數檢查中...", () -> {
+            StringBuilder text = new StringBuilder();
+            text.append("== env 檔案位置 ==\n");
+            for (Path path : envFiles()) {
+                text.append(Files.isRegularFile(path) ? "存在：" : "未找到：").append(path).append('\n');
+            }
+
+            text.append("\n== AI Key / 模型 ==\n");
+            appendEnv(text, "AI_PROVIDER", true);
+            appendEnv(text, "AI_MODEL", true);
+            appendEnv(text, "AI_BASE_URL", true);
+            appendEnv(text, "OPENAI_API_KEY", false);
+            appendEnv(text, "ANTHROPIC_API_KEY", false);
+            appendEnv(text, "GEMINI_API_KEY", false);
+            appendEnv(text, "GOOGLE_API_KEY", false);
+            appendEnv(text, "OPENROUTER_API_KEY", false);
+            appendEnv(text, "AI_API_KEY", false);
+            appendEnv(text, "OLLAMA_BASE_URL", true);
+            appendEnv(text, "OLLAMA_MODEL", true);
+            appendEnv(text, "OLLAMA_EXE_PATH", false);
+            appendEnv(text, "OLLAMA_MODELS", false);
+
+            text.append("\n== 股票來源 ==\n");
+            appendEnv(text, "STOCK_PROVIDER_CHAIN", true);
+            appendEnv(text, "STOCK_HISTORY_PROVIDER_CHAIN", true);
+            appendEnv(text, "STOCK_INTRADAY_PROVIDER_CHAIN", true);
+            appendEnv(text, "WEB_STOCK_SOURCES", true);
+            appendEnv(text, "WEB_STOCK_USER_AGENT", true);
+            appendEnv(text, "FUGLE_API_KEY", false);
+            appendEnv(text, "FINMIND_TOKEN", false);
+
+            text.append("\n== 券商 ==\n");
+            appendEnv(text, "BROKER_BASE_URL", false);
+            appendEnv(text, "BROKER_USERNAME", false);
+            appendEnv(text, "BROKER_PASSWORD", false);
+            appendEnv(text, "BROKER_API_KEY", false);
+            appendEnv(text, "BROKER_AUTH_TOKEN", false);
+            appendEnv(text, "BROKER_QUOTE_ENDPOINT", false);
+            appendEnv(text, "BROKER_INTRADAY_BARS_ENDPOINT", false);
+            appendEnv(text, "BROKER_ACCOUNT_ENDPOINT", false);
+            appendEnv(text, "BROKER_POSITIONS_ENDPOINT", false);
+            return text.toString();
+        });
+    }
+
+    private void refreshAiStatus() {
+        StringBuilder text = new StringBuilder();
+        text.append("== AI provider 狀態 ==\n");
+        text.append(hub.getAiConfigurationStatus()).append('\n');
+        for (String line : hub.getAllAiProviderStatusLines()) {
+            text.append(line).append('\n');
+        }
+        text.append("\n== 優先順序 ==\n");
+        text.append(String.join(" -> ", AI_PROVIDERS)).append('\n');
+        text.append("\n按「送出測試問題」可確認實際由哪個 AI 回覆。\n");
+        aiArea.setText(text.toString());
+    }
+
+    private void askAi() {
+        String prompt = aiPromptField.getText();
+        runTextTask(aiArea, "AI 回覆中...", () -> hub.askAi(prompt));
+    }
+
+    private void refreshStorageAndBroker() {
+        storageArea.setText(buildStorageText());
+        runTextTask(brokerArea, "券商狀態檢查中...", this::buildBrokerText);
+    }
+
+    private String buildStorageText() {
+        StringBuilder text = new StringBuilder();
+        text.append("== 本地儲存診斷 ==\n");
+        String path = hub.getMarketDatabasePath();
+        if (path == null || path.isBlank()) {
+            text.append("股票資料：未啟用正式本地儲存。\n");
+            text.append("AI 回覆：未啟用正式對話紀錄儲存。\n");
+            text.append("目前資料主要是即時查詢後直接回傳給 UI。\n");
+        } else {
+            text.append("市場資料庫：").append(path).append('\n');
+        }
+        text.append("\n建議之後可在 API 範圍新增 data/api_cache，用 jsonl 保存報價、K 線、歷史資料與 AI 回覆。\n");
+        return text.toString();
+    }
+
+    private String buildBrokerText() {
+        StringBuilder text = new StringBuilder();
+        text.append("== 券商診斷 ==\n");
+        String status = hub.getBrokerStatus();
+        text.append("狀態：").append(status).append('\n');
+        if (!status.contains("ready")) {
+            text.append("尚未完成券商設定，所以不查帳戶與庫存。\n");
+            return text.toString();
+        }
+
+        BrokerAccountSnapshot snapshot = hub.fetchBrokerAccountSnapshot();
+        text.append("帳戶：").append(snapshot.getAccountId()).append('\n');
+        text.append("現金：").append(formatDouble(snapshot.getCashBalance())).append('\n');
+        text.append("市值：").append(formatDouble(snapshot.getMarketValue())).append('\n');
+        text.append("總權益：").append(formatDouble(snapshot.getTotalEquity())).append('\n');
+        text.append("來源：").append(snapshot.getProvider()).append('\n');
+
+        List<BrokerPosition> positions = hub.fetchBrokerPositions();
+        text.append("\n庫存筆數：").append(positions.size()).append('\n');
+        for (BrokerPosition position : positions.stream().limit(20).toList()) {
+            text.append(position.getStockId())
+                    .append(' ')
+                    .append(position.getStockName())
+                    .append(" 股數 ")
+                    .append(position.getQuantity())
+                    .append(" 均價 ")
+                    .append(formatDouble(position.getAveragePrice()))
+                    .append('\n');
+        }
+        return text.toString();
     }
 
     private QuoteRow toQuoteRow(StockQuoteAttempt attempt) {
         StockQuote quote = attempt.getQuote();
-        if (quote == null) {
-            return new QuoteRow(
-                    attempt.getStockId(),
-                    attempt.getProviderName(),
-                    localizeStatus(attempt.getStatus()),
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    displayMessage(attempt.getMessage())
-            );
-        }
-
         return new QuoteRow(
-                quote.getStockId().isBlank() ? attempt.getStockId() : quote.getStockId(),
-                quote.getProvider().isBlank() ? attempt.getProviderName() : quote.getProvider(),
+                attempt.getStockId(),
+                attempt.getProviderName(),
                 localizeStatus(attempt.getStatus()),
-                quote.getStockName(),
-                formatDouble(quote.getLastPrice()),
-                formatDouble(quote.getOpenPrice()),
-                formatDouble(quote.getHighPrice()),
-                formatDouble(quote.getLowPrice()),
-                quote.getVolume() == 0 ? "" : String.valueOf(quote.getVolume()),
-                quote.getFetchedAt().format(TIME_FORMAT),
-                displayMessage(attempt.getMessage())
+                attempt.getDataGranularity(),
+                quote == null ? "" : quote.getStockName(),
+                quote == null ? "" : formatDouble(quote.getLastPrice()),
+                quote == null ? "" : formatDouble(quote.getOpenPrice()),
+                quote == null ? "" : formatDouble(quote.getHighPrice()),
+                quote == null ? "" : formatDouble(quote.getLowPrice()),
+                quote == null || quote.getVolume() == 0 ? "" : String.valueOf(quote.getVolume()),
+                message(attempt.getMessage())
         );
     }
 
-    private void refreshStatus() {
-        StringBuilder stockStatus = new StringBuilder();
-        for (Map.Entry<String, String> entry : hub.getStockProviderStatus().entrySet()) {
-            stockStatus.append(entry.getKey()).append(" -> ").append(entry.getValue()).append('\n');
-        }
-        stockStatus.append('\n').append("券商狀態：").append(hub.getBrokerStatus()).append('\n');
-        stockStatusArea.setText(stockStatus.toString());
-
-        StringBuilder aiStatus = new StringBuilder();
-        aiStatus.append("目前選擇：").append(hub.getAiConfigurationStatus()).append('\n');
-        for (String statusLine : hub.getAllAiProviderStatusLines()) {
-            aiStatus.append(statusLine).append('\n');
-        }
-        aiStatusArea.setText(aiStatus.toString());
+    private IntradayRow toIntradayRow(StockIntradayAttempt attempt, IntradayBar bar) {
+        return new IntradayRow(
+                bar.getStockId(),
+                bar.getProvider().isBlank() ? attempt.getProviderName() : bar.getProvider(),
+                localizeStatus(attempt.getStatus()),
+                attempt.getDataGranularity(),
+                bar.getTime() == null ? "" : bar.getTime().toString(),
+                formatDouble(bar.getOpen()),
+                formatDouble(bar.getHigh()),
+                formatDouble(bar.getLow()),
+                formatDouble(bar.getClose()),
+                String.valueOf(bar.getVolume()),
+                "共 " + attempt.getBarCount() + " 筆；" + message(attempt.getMessage())
+        );
     }
 
-    private void runFullApiTest() {
-        List<String> symbols = parseSymbols(symbolsField.getText());
-        if (symbols.isEmpty()) {
-            symbols = List.of("2330");
+    private void drawIntradayChart(List<IntradayBar> bars, LocalDate fromDate, LocalDate toDate, String interval) {
+        if (intradayChartCanvas == null) {
+            return;
         }
+        GraphicsContext gc = intradayChartCanvas.getGraphicsContext2D();
+        double width = intradayChartCanvas.getWidth();
+        double height = intradayChartCanvas.getHeight();
+        gc.setFill(Color.web("#0d1117"));
+        gc.fillRect(0, 0, width, height);
 
-        fullTestButton.setDisable(true);
-        fullTestArea.setText("全方位 API 測試中...");
-        List<String> testSymbols = List.copyOf(symbols);
-        Task<String> task = new Task<>() {
-            @Override
-            protected String call() {
-                return buildFullApiTestReport(testSymbols);
+        if (bars == null || bars.isEmpty()) {
+            if (intradayChartLabel != null) {
+                intradayChartLabel.setText("K 線圖：區間 " + fromDate + " 到 " + toDate + " 沒有可畫資料");
             }
-        };
-        task.setOnSucceeded(event -> {
-            fullTestArea.setText(task.getValue());
-            fullTestButton.setDisable(false);
-            refreshStatus();
-        });
-        task.setOnFailed(event -> {
-            fullTestArea.setText("全方位 API 測試失敗：" + displayMessage(task.getException().getMessage()));
-            fullTestButton.setDisable(false);
-        });
-        new Thread(task, "stockbucks-api-debug-full-test").start();
-    }
-
-    private String buildFullApiTestReport(List<String> symbols) {
-        ApiTestSummary summary = new ApiTestSummary();
-        StringBuilder report = new StringBuilder();
-        StringBuilder detail = new StringBuilder();
-
-        appendLine(detail, "== AI API ==");
-        for (String provider : List.of("gemini", "anthropic", "openrouter", "ollama", "openai-compatible", "openai")) {
-            appendLine(detail, testAiProvider(provider, summary));
-        }
-
-        appendLine(detail, "");
-        appendLine(detail, "== 環境變數查缺 ==");
-        appendEnvironmentLine(detail, "AI_PROVIDER", "目前 AI 來源", true);
-        appendEnvironmentLine(detail, "AI_MODEL", "雲端 AI 共用模型", false);
-        appendEnvironmentLine(detail, "AI_BASE_URL", "雲端/相容 API 共用 base URL", false);
-        appendEnvironmentLine(detail, "GEMINI_API_KEY", "Gemini API Key", false);
-        appendEnvironmentLine(detail, "GOOGLE_API_KEY", "Gemini API Key 別名", false);
-        appendEnvironmentLine(detail, "ANTHROPIC_API_KEY", "Anthropic API Key", false);
-        appendEnvironmentLine(detail, "ANTHROPIC_VERSION", "Anthropic API 版本", true);
-        appendEnvironmentLine(detail, "OPENROUTER_API_KEY", "OpenRouter API Key", false);
-        appendEnvironmentLine(detail, "OPENAI_API_KEY", "OpenAI API Key", false);
-        appendEnvironmentLine(detail, "AI_API_KEY", "OpenAI-compatible API Key", false);
-        appendEnvironmentLine(detail, "OLLAMA_BASE_URL", "Ollama 本機服務 URL", true);
-        appendEnvironmentLine(detail, "OLLAMA_MODEL", "Ollama 模型", true);
-        appendEnvironmentLine(detail, "OLLAMA_EXE_PATH", "Ollama 執行檔路徑", false);
-        appendEnvironmentLine(detail, "OLLAMA_MODELS", "Ollama 模型資料夾", false);
-        appendEnvironmentLine(detail, "STOCK_PROVIDER_CHAIN", "股票來源排序", true);
-        appendEnvironmentLine(detail, "STOCK_HISTORY_PROVIDER_CHAIN", "歷史資料來源排序", true);
-        appendEnvironmentLine(detail, "STOCK_INTRADAY_PROVIDER_CHAIN", "盤中 K 線來源排序", true);
-        appendEnvironmentLine(detail, "BROKER_PROVIDER", "券商 provider 名稱", true);
-        appendEnvironmentLine(detail, "BROKER_BASE_URL", "券商 API base URL", false);
-        appendEnvironmentLine(detail, "BROKER_USERNAME", "券商帳號", false);
-        appendEnvironmentLine(detail, "BROKER_PASSWORD", "券商密碼", false);
-        appendEnvironmentLine(detail, "BROKER_API_KEY", "券商 API Key", false);
-        appendEnvironmentLine(detail, "BROKER_AUTH_TOKEN", "券商既有 token", false);
-        appendEnvironmentLine(detail, "BROKER_AUTH_TOKEN_FIELD", "券商登入 token 欄位", true);
-        appendEnvironmentLine(detail, "BROKER_CERT_PATH", "券商憑證路徑", false);
-        appendEnvironmentLine(detail, "BROKER_CERT_PASSWORD", "券商憑證密碼", false);
-        appendEnvironmentLine(detail, "BROKER_LOGIN_ENDPOINT", "券商登入端點", false);
-        appendEnvironmentLine(detail, "BROKER_QUOTE_ENDPOINT", "券商報價端點", false);
-        appendEnvironmentLine(detail, "BROKER_INTRADAY_BARS_ENDPOINT", "券商日內 K 線端點", false);
-        appendEnvironmentLine(detail, "BROKER_ACCOUNT_ENDPOINT", "券商帳戶端點", false);
-        appendEnvironmentLine(detail, "BROKER_POSITIONS_ENDPOINT", "券商庫存端點", false);
-        appendEnvironmentLine(detail, "FUGLE_API_KEY", "Fugle API Key", false);
-        appendEnvironmentLine(detail, "FUGLE_BASE_URL", "Fugle base URL", true);
-        appendEnvironmentLine(detail, "TWSE_WEB_BASE_URL", "TWSE Web base URL", true);
-        appendEnvironmentLine(detail, "TWSE_OPENAPI_BASE_URL", "TWSE OpenAPI base URL", true);
-        appendEnvironmentLine(detail, "TPEX_OPENAPI_BASE_URL", "TPEx OpenAPI base URL", true);
-        appendEnvironmentLine(detail, "WEB_STOCK_SOURCES", "網頁爬蟲來源順序", true);
-        appendEnvironmentLine(detail, "WEB_STOCK_GOOGLE_URL_TEMPLATE", "Google Finance URL 模板", true);
-        appendEnvironmentLine(detail, "WEB_STOCK_YAHOO_URL_TEMPLATE", "Yahoo 股市 URL 模板", true);
-        appendEnvironmentLine(detail, "WEB_STOCK_YAHOO_CHART_URL_TEMPLATE", "Yahoo 歷史日 K URL 模板", true);
-        appendEnvironmentLine(detail, "WEB_STOCK_YAHOO_INTRADAY_URL_TEMPLATE", "Yahoo 盤中 K 線 URL 模板", true);
-        appendEnvironmentLine(detail, "WEB_STOCK_CNBC_URL_TEMPLATE", "CNBC URL 模板", true);
-        appendEnvironmentLine(detail, "WEB_STOCK_MSN_URL_TEMPLATE", "MSN URL 模板", false);
-        appendEnvironmentLine(detail, "WEB_STOCK_WANTGOO_URL_TEMPLATE", "WantGoo URL 模板", true);
-        appendEnvironmentLine(detail, "WEB_STOCK_USER_AGENT", "網頁爬蟲 User-Agent", true);
-        appendEnvironmentLine(detail, "FINMIND_TOKEN", "FinMind Token", false);
-        appendEnvironmentLine(detail, "FINMIND_BASE_URL", "FinMind base URL", true);
-        appendEnvironmentLine(detail, "LOCAL_STOCK_CSV_NAME", "本地 CSV 檔名", true);
-
-        appendLine(detail, "");
-        appendLine(detail, "== 股票來源設定 ==");
-        for (Map.Entry<String, String> entry : hub.getStockProviderStatus().entrySet()) {
-            String status = entry.getValue();
-            countProviderStatus(summary, status);
-            appendLine(detail, entry.getKey() + "：" + localizeProviderStatus(status));
-        }
-
-        appendLine(detail, "");
-        appendLine(detail, "== 股票報價來源測試 ==");
-        for (String symbol : symbols) {
-            appendLine(detail, "[" + symbol + "]");
-            for (StockQuoteAttempt attempt : hub.fetchStockQuoteAttempts(symbol)) {
-                validateAttempt(summary, symbol, attempt);
-                StockQuote quote = attempt.getQuote();
-                String price = quote == null ? "" : " | 價格 " + formatDouble(quote.getLastPrice());
-                appendLine(detail, attempt.getProviderName()
-                        + "："
-                        + localizeStatus(attempt.getStatus())
-                        + " | 粒度 " + attempt.getDataGranularity()
-                        + price
-                        + " | "
-                        + expectedLabel(symbol, attempt)
-                        + " | "
-                        + displayMessage(attempt.getMessage()));
-            }
-        }
-
-        appendLine(detail, "");
-        appendLine(detail, "== 歷史/全市場資料 ==");
-        String firstSymbol = symbols.get(0);
-        appendLine(detail, "歷史來源互補 " + firstSymbol + "：");
-        for (StockHistoryAttempt attempt : hub.fetchStockHistoryAttempts(firstSymbol, LocalDate.now().minusDays(10), LocalDate.now())) {
-            appendLine(detail, attempt.getProviderName()
-                    + "：" + localizeStatus(attempt.getStatus())
-                    + " | 粒度 " + attempt.getDataGranularity()
-                    + " | 筆數 " + attempt.getRowCount()
-                    + " | " + displayMessage(attempt.getMessage()));
-        }
-        appendCountLine(detail, summary, "歷史資料 " + firstSymbol, () ->
-                hub.fetchStockHistory(firstSymbol, LocalDate.now().minusDays(10), LocalDate.now()).size());
-        appendCountLine(detail, summary, "上市股票清單", () -> hub.fetchAllListedStocks().size());
-        appendCountLine(detail, summary, "全市場日資料", () -> hub.fetchAllStocksDailyMarket().size());
-
-        appendLine(detail, "");
-        appendLine(detail, "== 盤中 K 線來源 ==");
-        for (StockIntradayAttempt attempt : hub.fetchStockIntradayAttempts(firstSymbol, "1m")) {
-            appendLine(detail, attempt.getProviderName()
-                    + "：" + localizeStatus(attempt.getStatus())
-                    + " | 粒度 " + attempt.getDataGranularity()
-                    + " | 筆數 " + attempt.getBarCount()
-                    + " | " + displayMessage(attempt.getMessage()));
-        }
-
-        appendLine(detail, "");
-        appendLine(detail, "== 券商 API ==");
-        String brokerStatus = hub.getBrokerStatus();
-        appendLine(detail, "券商狀態：" + brokerStatus);
-        if (brokerStatus.contains("ready")) {
-            appendTextLine(detail, summary, "帳戶總覽", () -> summarizeBrokerSnapshot(hub.fetchBrokerAccountSnapshot()));
-            appendCountLine(detail, summary, "庫存", () -> hub.fetchBrokerPositions().size());
-            appendCountLine(detail, summary, "小時線 " + firstSymbol, () -> hub.fetchBrokerHourlyBars(firstSymbol).size());
-        } else {
-            summary.skipped++;
-            summary.expectedOk++;
-            summary.addImportant("券商未設定，略過帳戶/庫存/小時線");
-            appendLine(detail, "券商查詢：略過，尚未完成券商設定");
-        }
-
-        appendLine(detail, "");
-        appendLine(detail, "== 端點登記 ==");
-        appendLine(detail, "已登記股票端點：" + hub.supportedStockApiEndpoints().size() + " 個");
-
-        appendSummary(report, summary);
-        appendLine(report, "");
-        appendLine(report, "== 詳細結果 ==");
-        report.append(detail);
-        return report.toString();
-    }
-
-    private void appendSummary(StringBuilder report, ApiTestSummary summary) {
-        appendLine(report, "== API 狀態總結 ==");
-        appendLine(report, "成功：" + summary.success + " | 缺設定：" + summary.missing + " | 失敗：" + summary.failed + " | 無資料：" + summary.noData + " | 略過：" + summary.skipped);
-        appendLine(report, "符合預期：" + summary.expectedOk + " | 需處理：" + summary.needsAction);
-        if (summary.importantItems.isEmpty()) {
-            appendLine(report, "重點：目前沒有需要優先處理的缺項。");
+            gc.setFill(Color.web("#9aa4b2"));
+            gc.fillText("此區間沒有 K 線資料", 24, height / 2);
             return;
         }
 
-        appendLine(report, "重點：");
-        for (String item : summary.importantItems) {
-            appendLine(report, "- " + item);
+        double min = bars.stream().mapToDouble(IntradayBar::getLow).filter(value -> value > 0).min().orElse(0);
+        double max = bars.stream().mapToDouble(IntradayBar::getHigh).filter(value -> value > 0).max().orElse(0);
+        if (max <= min) {
+            max = min + 1;
+        }
+
+        double left = 54;
+        double right = 16;
+        double top = 18;
+        double bottom = 34;
+        double plotWidth = Math.max(1, width - left - right);
+        double plotHeight = Math.max(1, height - top - bottom);
+
+        gc.setStroke(Color.web("#30363d"));
+        gc.setLineWidth(1);
+        for (int i = 0; i <= 4; i++) {
+            double y = top + plotHeight * i / 4.0;
+            gc.strokeLine(left, y, width - right, y);
+            double price = max - (max - min) * i / 4.0;
+            gc.setFill(Color.web("#9aa4b2"));
+            gc.fillText(formatDouble(price), 6, y + 4);
+        }
+
+        double slot = plotWidth / Math.max(1, bars.size());
+        double candleWidth = Math.max(2, Math.min(10, slot * 0.65));
+        for (int i = 0; i < bars.size(); i++) {
+            IntradayBar bar = bars.get(i);
+            double x = left + slot * i + slot / 2.0;
+            double openY = priceToY(bar.getOpen(), min, max, top, plotHeight);
+            double closeY = priceToY(bar.getClose(), min, max, top, plotHeight);
+            double highY = priceToY(bar.getHigh(), min, max, top, plotHeight);
+            double lowY = priceToY(bar.getLow(), min, max, top, plotHeight);
+            boolean up = bar.getClose() >= bar.getOpen();
+            Color color = up ? Color.web("#ff6b6b") : Color.web("#2ea043");
+
+            gc.setStroke(Color.web("#8b949e"));
+            gc.strokeLine(x, highY, x, lowY);
+            gc.setFill(color);
+            double bodyTop = Math.min(openY, closeY);
+            double bodyHeight = Math.max(1, Math.abs(closeY - openY));
+            gc.fillRect(x - candleWidth / 2.0, bodyTop, candleWidth, bodyHeight);
+        }
+
+        IntradayBar first = bars.get(0);
+        IntradayBar last = bars.get(bars.size() - 1);
+        gc.setFill(Color.web("#9aa4b2"));
+        gc.fillText(first.getTime() == null ? "" : first.getTime().toLocalDate().toString(), left, height - 10);
+        gc.fillText(last.getTime() == null ? "" : last.getTime().toLocalDate().toString(), Math.max(left, width - 120), height - 10);
+
+        if (intradayChartLabel != null) {
+            intradayChartLabel.setText("K 線圖：" + interval + "，" + bars.size() + " 筆，"
+                    + fromDate + " 到 " + toDate
+                    + "，價格 " + formatDouble(min) + " - " + formatDouble(max));
         }
     }
 
-    private void appendEnvironmentLine(StringBuilder detail, String key, String label, boolean hasDefault) {
+    private double priceToY(double price, double min, double max, double top, double plotHeight) {
+        if (price <= 0 || max <= min) {
+            return top + plotHeight;
+        }
+        return top + (max - price) / (max - min) * plotHeight;
+    }
+
+    private void appendEnv(StringBuilder text, String key, boolean optionalDefault) {
         String value = EnvironmentConfig.get(key);
         if (value == null || value.isBlank()) {
-            appendLine(detail, key + "：未設定" + (hasDefault ? "，會使用預設值" : "，需要時再填") + " | " + label);
+            text.append(key).append("：缺少");
+            if (optionalDefault) {
+                text.append("，可使用預設值");
+            }
+            text.append('\n');
             return;
         }
-        appendLine(detail, key + "：已設定 | " + label);
+        text.append(key).append("：已設定，").append(maskValue(value)).append('\n');
     }
 
-    private void countProviderStatus(ApiTestSummary summary, String status) {
-        if (status == null || status.isBlank()) {
-            summary.failed++;
-            summary.needsAction++;
-            return;
-        }
-        if (status.equals("ready")) {
-            summary.success++;
-            summary.expectedOk++;
-            return;
-        }
-        if (status.startsWith("missing ")) {
-            summary.missing++;
-            summary.expectedOk++;
-            summary.addImportant("缺 " + status.substring("missing ".length()));
-            return;
-        }
-        summary.failed++;
-        summary.needsAction++;
+    private List<Path> envFiles() {
+        Path cwd = Path.of(".").toAbsolutePath().normalize();
+        Path userHome = Path.of(System.getProperty("user.home", "."));
+        return List.of(
+                cwd.resolve(".env"),
+                cwd.resolve("stockbucks.local.env"),
+                cwd.resolve("stockbucks.env"),
+                userHome.resolve(".stockbucks").resolve(".env")
+        );
     }
 
-    private void validateAttempt(ApiTestSummary summary, String requestedSymbol, StockQuoteAttempt attempt) {
-        switch (attempt.getStatus()) {
-            case "success" -> {
-                if (isQuoteExpected(requestedSymbol, attempt)) {
-                    summary.expectedOk++;
-                } else {
-                    summary.needsAction++;
-                    summary.addImportant(attempt.getProviderName() + " 成功但資料不合理：" + requestedSymbol);
-                }
+    private String providerSummary() {
+        StringBuilder text = new StringBuilder();
+        for (Map.Entry<String, String> entry : hub.getStockProviderStatus().entrySet()) {
+            if (text.length() > 0) {
+                text.append("；");
             }
-            case "missing" -> {
-                summary.expectedOk++;
-            }
-            case "no data" -> {
-                summary.expectedOk++;
-            }
-            case "failed" -> {
-                summary.needsAction++;
-                summary.addImportant(attempt.getProviderName() + " 失敗：" + displayMessage(attempt.getMessage()));
-            }
-            default -> {
-                summary.needsAction++;
-            }
+            text.append(entry.getKey()).append('=').append(entry.getValue());
         }
+        return text.toString();
     }
 
-    private void appendCountLine(StringBuilder detail, ApiTestSummary summary, String label, CountSupplier supplier) {
-        try {
-            int count = supplier.get();
-            if (count > 0) {
-                summary.success++;
-            } else {
-                summary.noData++;
-            }
-            summary.expectedOk++;
-            appendLine(detail, label + "：" + count + " 筆");
-        } catch (RuntimeException ex) {
-            summary.failed++;
-            summary.needsAction++;
-            summary.addImportant(label + " 失敗：" + displayMessage(ex.getMessage()));
-            appendLine(detail, label + "：失敗：" + displayMessage(ex.getMessage()));
-        }
+    private String keyStatus(String key) {
+        return EnvironmentConfig.has(key) ? "已設定" : "缺少 " + key;
     }
 
-    private void appendTextLine(StringBuilder detail, ApiTestSummary summary, String label, TextSupplier supplier) {
-        try {
-            String text = supplier.get();
-            summary.success++;
-            summary.expectedOk++;
-            appendLine(detail, label + "：" + text);
-        } catch (RuntimeException ex) {
-            summary.failed++;
-            summary.needsAction++;
-            summary.addImportant(label + " 失敗：" + displayMessage(ex.getMessage()));
-            appendLine(detail, label + "：失敗：" + displayMessage(ex.getMessage()));
-        }
+    private String brokerSimpleStatus() {
+        String status = hub.getBrokerStatus();
+        return status.contains("ready") ? "可測" : status;
     }
 
-    private String testAiProvider(String provider, ApiTestSummary summary) {
-        ApiModelClient client = new ApiModelClient(provider);
-        String missing = client.getMissingApiKeyName();
-        if (!missing.isBlank()) {
-            summary.missing++;
-            summary.expectedOk++;
-            summary.addImportant(provider + " 缺 " + missing);
-            return provider + "：缺 " + missing;
-        }
-
-        String answer = client.ask("請只回覆 OK，用來測試 API 是否可用。");
-        if (answer == null || answer.isBlank()) {
-            summary.failed++;
-            summary.needsAction++;
-            summary.addImportant(provider + " 空白回覆");
-            return provider + "：失敗，空白回覆";
-        }
-        if (answer.contains("[AI API error]") || answer.contains("[AI API request failed]") || answer.contains("[AI config]")) {
-            summary.failed++;
-            summary.needsAction++;
-            String reason = summarizeAiTestFailure(answer);
-            summary.addImportant(provider + " " + reason);
-            return provider + "：失敗，" + reason;
-        }
-        summary.success++;
-        summary.expectedOk++;
-        return provider + "：成功";
-    }
-
-    private String summarizeAiTestFailure(String answer) {
-        if (answer.contains("insufficient_quota")) {
-            return "OpenAI 額度不足或付款方案未啟用";
-        }
-        if (answer.toLowerCase().contains("model") && answer.toLowerCase().contains("not found")) {
-            return "本機 Ollama 缺少模型，請先下載 OLLAMA_MODEL";
-        }
-        if (answer.contains("HTTP 429")) {
-            return "請求過多或額度限制";
-        }
-        if (answer.contains("無法連線到") && answer.contains("localhost")) {
-            return "本機 AI 服務未啟動或連不上";
-        }
-        return firstLine(answer);
-    }
-
-    private String expectedLabel(String requestedSymbol, StockQuoteAttempt attempt) {
-        return isAttemptExpected(requestedSymbol, attempt) ? "符合預期" : "需處理";
-    }
-
-    private boolean isAttemptExpected(String requestedSymbol, StockQuoteAttempt attempt) {
-        if (!"success".equals(attempt.getStatus())) {
-            return !"failed".equals(attempt.getStatus());
-        }
-        return isQuoteExpected(requestedSymbol, attempt);
-    }
-
-    private boolean isQuoteExpected(String requestedSymbol, StockQuoteAttempt attempt) {
-        StockQuote quote = attempt.getQuote();
-        if (quote == null || quote.getLastPrice() <= 0) {
-            return false;
-        }
-
-        String quoteSymbol = quote.getStockId() == null ? "" : quote.getStockId().trim();
-        String requested = requestedSymbol == null ? "" : requestedSymbol.trim();
-        return quoteSymbol.isBlank()
-                || requested.isBlank()
-                || quoteSymbol.equalsIgnoreCase(requested);
-    }
-
-    private String summarizeBrokerSnapshot(BrokerAccountSnapshot snapshot) {
-        if (snapshot == null) {
-            return "無資料";
-        }
-        return "帳戶 " + snapshot.getAccountId()
-                + "，現金 " + formatDouble(snapshot.getCashBalance())
-                + "，市值 " + formatDouble(snapshot.getMarketValue())
-                + "，庫存 " + snapshot.getPositions().size() + " 筆";
-    }
-
-    private String safeCount(CountSupplier supplier) {
-        try {
-            return String.valueOf(supplier.get());
-        } catch (RuntimeException ex) {
-            return "失敗：" + displayMessage(ex.getMessage());
-        }
-    }
-
-    private String safeText(TextSupplier supplier) {
-        try {
-            return supplier.get();
-        } catch (RuntimeException ex) {
-            return "失敗：" + displayMessage(ex.getMessage());
-        }
-    }
-
-    private String localizeProviderStatus(String status) {
-        if (status == null || status.isBlank()) {
-            return "";
-        }
-        if (status.startsWith("missing ")) {
-            return "缺 " + status.substring("missing ".length());
-        }
-        return status.equals("ready") ? "可用" : status;
-    }
-
-    private String firstLine(String text) {
-        return cleanAndLimit(text, 80);
-    }
-
-    private String displayMessage(String text) {
-        return cleanAndLimit(text, 140);
-    }
-
-    private String cleanAndLimit(String text, int maxLength) {
-        if (text == null || text.isBlank()) {
-            return "";
-        }
-        String cleaned = text
-                .replaceAll("(?is)<script.*?</script>", " ")
-                .replaceAll("(?is)<style.*?</style>", " ")
-                .replaceAll("<[^>]+>", " ")
-                .replaceAll("&quot;", "\"")
-                .replaceAll("&#x27;", "'")
-                .replaceAll("&#39;", "'")
-                .replaceAll("&nbsp;", " ")
-                .replaceAll("&amp;", "&")
-                .replaceAll("\\s+", " ")
-                .trim();
-        return cleaned.length() > maxLength ? cleaned.substring(0, maxLength) + "..." : cleaned;
-    }
-
-    private void appendLine(StringBuilder builder, String line) {
-        builder.append(line).append('\n');
-    }
-
-    private void askAi() {
-        askAiButton.setDisable(true);
-        aiAnswerArea.setText("AI 回覆中...");
-        Task<String> task = new Task<>() {
-            @Override
-            protected String call() {
-                return hub.askAi(aiPromptArea.getText());
-            }
-        };
-        task.setOnSucceeded(event -> {
-            aiAnswerArea.setText(task.getValue());
-            askAiButton.setDisable(false);
-        });
-        task.setOnFailed(event -> {
-            aiAnswerArea.setText("AI 測試失敗：" + displayMessage(task.getException().getMessage()));
-            askAiButton.setDisable(false);
-        });
-        new Thread(task, "stockbucks-api-debug-ai").start();
-    }
-
-    private List<String> parseSymbols(String text) {
-        if (text == null || text.isBlank()) {
-            return List.of();
+    private List<String> parseSymbols(String input) {
+        if (input == null || input.isBlank()) {
+            return List.of("2330");
         }
         List<String> symbols = new ArrayList<>();
-        for (String part : text.split("[,，\\s]+")) {
-            String symbol = part.trim();
+        for (String item : input.split(",")) {
+            String symbol = cleanStockId(item);
             if (!symbol.isBlank()) {
                 symbols.add(symbol);
             }
         }
-        return symbols;
+        return symbols.isEmpty() ? List.of("2330") : symbols;
     }
 
-    private String formatDouble(double value) {
-        return value <= 0 ? "" : String.format("%.2f", value);
+    private String cleanStockId(String value) {
+        return value == null ? "" : value.trim().replaceAll("[^0-9A-Za-z]", "");
+    }
+
+    private LocalDate parseDate(String value, LocalDate fallback) {
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            return LocalDate.parse(value.trim());
+        } catch (RuntimeException ex) {
+            return fallback;
+        }
+    }
+
+    private int parsePositiveInt(String value, int fallback) {
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            return parsed <= 0 ? fallback : parsed;
+        } catch (RuntimeException ex) {
+            return fallback;
+        }
+    }
+
+    private boolean isWithinDateRange(IntradayBar bar, LocalDate fromDate, LocalDate toDate) {
+        if (bar == null || bar.getTime() == null) {
+            return false;
+        }
+        LocalDate date = bar.getTime().toLocalDate();
+        return !date.isBefore(fromDate) && !date.isAfter(toDate);
+    }
+
+    private String rangeMessage(int totalCount, int filteredCount, LocalDate fromDate, LocalDate toDate, String sourceMessage) {
+        return "來源共 " + totalCount + " 筆；區間 " + fromDate + " 到 " + toDate
+                + " 符合 " + filteredCount + " 筆；" + message(sourceMessage);
     }
 
     private String localizeStatus(String status) {
         return switch (status == null ? "" : status) {
             case "success" -> "成功";
-            case "missing" -> "缺少設定";
+            case "missing" -> "缺設定";
             case "no data" -> "無資料";
-            case "daily only" -> "只有日資料";
             case "failed" -> "失敗";
+            case "daily only" -> "僅日資料";
             default -> status == null ? "" : status;
         };
     }
 
-    private Label sectionTitle(String text) {
-        Label label = new Label(text);
-        label.setStyle("-fx-text-fill: white; -fx-font-size: 18px; -fx-font-weight: bold;");
-        return label;
+    private String maskValue(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() <= 8) {
+            return "***";
+        }
+        return trimmed.substring(0, 3) + "..." + trimmed.substring(trimmed.length() - 3);
+    }
+
+    private String blankAsNone(String value) {
+        return value == null || value.isBlank() ? "無" : value;
+    }
+
+    private String message(Throwable throwable) {
+        return throwable == null || throwable.getMessage() == null ? "未知錯誤" : message(throwable.getMessage());
+    }
+
+    private String message(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace('\n', ' ').replace('\r', ' ').trim();
+    }
+
+    private String formatDouble(double value) {
+        if (Double.isNaN(value) || Double.isInfinite(value) || value == 0) {
+            return "";
+        }
+        return String.format("%.2f", value);
+    }
+
+    private FileStatusRow fileStatus(Path path, String role, String note) {
+        Path absolute = path.toAbsolutePath().normalize();
+        if (!Files.exists(absolute)) {
+            return new FileStatusRow(path.toString(), role, "未建立", "", "", note);
+        }
+        try {
+            String status = Files.isRegularFile(absolute) ? "存在" : "資料夾";
+            String size = Files.isRegularFile(absolute) ? formatBytes(Files.size(absolute)) : "";
+            String modified = formatModified(Files.getLastModifiedTime(absolute).toInstant());
+            return new FileStatusRow(path.toString(), role, status, size, modified, note);
+        } catch (Exception ex) {
+            return new FileStatusRow(path.toString(), role, "讀取失敗", "", "", message(ex));
+        }
+    }
+
+    private List<FileStatusRow> scanFolder(Path folder, String role) {
+        Path absolute = folder.toAbsolutePath().normalize();
+        if (!Files.isDirectory(absolute)) {
+            return List.of(new FileStatusRow(folder.toString(), role, "未建立", "", "", "目前沒有正式輸出到此目錄"));
+        }
+        try (Stream<Path> stream = Files.list(absolute)) {
+            Path cwd = Path.of(".").toAbsolutePath().normalize();
+            return stream
+                    .filter(Files::isRegularFile)
+                    .sorted()
+                    .map(path -> fileStatus(cwd.relativize(path.toAbsolutePath().normalize()), role, fileRole(path)))
+                    .toList();
+        } catch (Exception ex) {
+            return List.of(new FileStatusRow(folder.toString(), role, "讀取失敗", "", "", message(ex)));
+        }
+    }
+
+    private String fileRole(Path path) {
+        String name = path.getFileName().toString().toLowerCase();
+        if (name.endsWith(".csv")) {
+            return "CSV 歷史或備援資料";
+        }
+        if (name.endsWith(".json") || name.endsWith(".jsonl")) {
+            return "API 回應或快取資料";
+        }
+        if (name.endsWith(".db") || name.endsWith(".sqlite")) {
+            return "資料庫檔案";
+        }
+        if (name.endsWith(".log")) {
+            return "執行紀錄";
+        }
+        return "其他檔案";
+    }
+
+    private String formatBytes(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        if (bytes < 1024 * 1024) {
+            return String.format("%.1f KB", bytes / 1024.0);
+        }
+        return String.format("%.1f MB", bytes / 1024.0 / 1024.0);
+    }
+
+    private String formatModified(Instant instant) {
+        return instant == null ? "" : instant.atZone(ZoneId.systemDefault()).format(TIME_FORMAT);
+    }
+
+    private int safeCount(CountSupplier supplier) {
+        try {
+            return supplier.get();
+        } catch (RuntimeException ex) {
+            return 0;
+        }
     }
 
     private TextArea createReadOnlyArea(String prompt) {
         TextArea area = new TextArea();
         area.setPromptText(prompt);
-        area.setEditable(false);
         area.setWrapText(true);
+        area.setEditable(false);
+        area.setStyle("-fx-font-family: 'Microsoft JhengHei', 'Consolas'; -fx-font-size: 13px;");
         return area;
     }
 
-    private VBox labeledBox(String labelText, javafx.scene.Node content) {
-        Label label = new Label(labelText);
-        label.setStyle("-fx-text-fill: #c9d1d9; -fx-font-weight: bold;");
-        VBox box = new VBox(5, label, content);
-        VBox.setVgrow(content, Priority.ALWAYS);
+    private Label sectionTitle(String text) {
+        Label label = new Label(text);
+        label.setStyle("-fx-text-fill: white; -fx-font-size: 15px; -fx-font-weight: bold;");
+        return label;
+    }
+
+    private HBox toolbar(javafx.scene.Node... nodes) {
+        HBox box = new HBox(8, nodes);
+        box.setAlignment(Pos.CENTER_LEFT);
         return box;
     }
 
-    public static class QuoteRow {
-        private final String stockId;
-        private final String provider;
-        private final String status;
-        private final String stockName;
-        private final String lastPrice;
-        private final String openPrice;
-        private final String highPrice;
-        private final String lowPrice;
-        private final String volume;
-        private final String fetchedAt;
-        private final String message;
-
-        public QuoteRow(String stockId,
-                        String provider,
-                        String status,
-                        String stockName,
-                        String lastPrice,
-                        String openPrice,
-                        String highPrice,
-                        String lowPrice,
-                        String volume,
-                        String fetchedAt,
-                        String message) {
-            this.stockId = stockId;
-            this.provider = provider;
-            this.status = status;
-            this.stockName = stockName;
-            this.lastPrice = lastPrice;
-            this.openPrice = openPrice;
-            this.highPrice = highPrice;
-            this.lowPrice = lowPrice;
-            this.volume = volume;
-            this.fetchedAt = fetchedAt;
-            this.message = message;
-        }
-
-        public String getStockId() {
-            return stockId;
-        }
-
-        public String getProvider() {
-            return provider;
-        }
-
-        public String getStatus() {
-            return status;
-        }
-
-        public String getStockName() {
-            return stockName;
-        }
-
-        public String getLastPrice() {
-            return lastPrice;
-        }
-
-        public String getOpenPrice() {
-            return openPrice;
-        }
-
-        public String getHighPrice() {
-            return highPrice;
-        }
-
-        public String getLowPrice() {
-            return lowPrice;
-        }
-
-        public String getVolume() {
-            return volume;
-        }
-
-        public String getFetchedAt() {
-            return fetchedAt;
-        }
-
-        public String getMessage() {
-            return message;
-        }
+    private VBox pane(javafx.scene.Node... nodes) {
+        VBox box = new VBox(10, nodes);
+        box.setPadding(new Insets(12));
+        box.setStyle("-fx-background-color: #f6f8fa;");
+        return box;
     }
 
-    private interface CountSupplier {
-        int get();
+    private <T> TableView<T> table(ObservableList<T> rows) {
+        TableView<T> table = new TableView<>(rows);
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        return table;
+    }
+
+    private <T> void addColumn(TableView<T> table, String title, String property, int width) {
+        TableColumn<T, String> column = new TableColumn<>(title);
+        column.setCellValueFactory(new PropertyValueFactory<>(property));
+        column.setPrefWidth(width);
+        table.getColumns().add(column);
+    }
+
+    private void runTextTask(TextArea target, String loadingText, TextSupplier supplier) {
+        target.setText(loadingText);
+        Task<String> task = new Task<>() {
+            @Override
+            protected String call() {
+                return supplier.get();
+            }
+        };
+        task.setOnSucceeded(event -> target.setText(task.getValue()));
+        task.setOnFailed(event -> target.setText("檢查失敗：" + message(task.getException())));
+        new Thread(task, "stockbucks-debug-text").start();
+    }
+
+    private record HistoryResult(List<HistorySourceRow> sources, List<DailyRow> dailyRows) {
+    }
+
+    private record IntradayResult(List<IntradayRow> rows,
+                                  List<IntradayBar> bars,
+                                  LocalDate fromDate,
+                                  LocalDate toDate,
+                                  String interval) {
     }
 
     private interface TextSupplier {
         String get();
     }
 
-    private static class ApiTestSummary {
-        private int success;
-        private int missing;
-        private int failed;
-        private int noData;
-        private int skipped;
-        private int expectedOk;
-        private int needsAction;
-        private final List<String> importantItems = new ArrayList<>();
+    private interface CountSupplier {
+        int get();
+    }
 
-        private void addImportant(String item) {
-            if (item == null || item.isBlank() || importantItems.contains(item) || importantItems.size() >= 8) {
-                return;
-            }
-            importantItems.add(item);
+    public static class QuoteRow {
+        private final String stockId;
+        private final String provider;
+        private final String status;
+        private final String granularity;
+        private final String stockName;
+        private final String lastPrice;
+        private final String openPrice;
+        private final String highPrice;
+        private final String lowPrice;
+        private final String volume;
+        private final String message;
+
+        QuoteRow(String stockId, String provider, String status, String granularity, String stockName,
+                 String lastPrice, String openPrice, String highPrice, String lowPrice, String volume, String message) {
+            this.stockId = stockId;
+            this.provider = provider;
+            this.status = status;
+            this.granularity = granularity;
+            this.stockName = stockName;
+            this.lastPrice = lastPrice;
+            this.openPrice = openPrice;
+            this.highPrice = highPrice;
+            this.lowPrice = lowPrice;
+            this.volume = volume;
+            this.message = message;
         }
+
+        public String getStockId() { return stockId; }
+        public String getProvider() { return provider; }
+        public String getStatus() { return status; }
+        public String getGranularity() { return granularity; }
+        public String getStockName() { return stockName; }
+        public String getLastPrice() { return lastPrice; }
+        public String getOpenPrice() { return openPrice; }
+        public String getHighPrice() { return highPrice; }
+        public String getLowPrice() { return lowPrice; }
+        public String getVolume() { return volume; }
+        public String getMessage() { return message; }
+    }
+
+    public static class IntradayRow {
+        private final String stockId;
+        private final String provider;
+        private final String status;
+        private final String granularity;
+        private final String time;
+        private final String open;
+        private final String high;
+        private final String low;
+        private final String close;
+        private final String volume;
+        private final String message;
+
+        IntradayRow(String stockId, String provider, String status, String granularity, String time,
+                    String open, String high, String low, String close, String volume, String message) {
+            this.stockId = stockId;
+            this.provider = provider;
+            this.status = status;
+            this.granularity = granularity;
+            this.time = time;
+            this.open = open;
+            this.high = high;
+            this.low = low;
+            this.close = close;
+            this.volume = volume;
+            this.message = message;
+        }
+
+        public String getStockId() { return stockId; }
+        public String getProvider() { return provider; }
+        public String getStatus() { return status; }
+        public String getGranularity() { return granularity; }
+        public String getTime() { return time; }
+        public String getOpen() { return open; }
+        public String getHigh() { return high; }
+        public String getLow() { return low; }
+        public String getClose() { return close; }
+        public String getVolume() { return volume; }
+        public String getMessage() { return message; }
+    }
+
+    public static class HistorySourceRow {
+        private final String provider;
+        private final String status;
+        private final String granularity;
+        private final String count;
+        private final String firstDate;
+        private final String lastDate;
+        private final String message;
+
+        HistorySourceRow(String provider, String status, String granularity, String count, String firstDate, String lastDate, String message) {
+            this.provider = provider;
+            this.status = status;
+            this.granularity = granularity;
+            this.count = count;
+            this.firstDate = firstDate;
+            this.lastDate = lastDate;
+            this.message = message;
+        }
+
+        public String getProvider() { return provider; }
+        public String getStatus() { return status; }
+        public String getGranularity() { return granularity; }
+        public String getCount() { return count; }
+        public String getFirstDate() { return firstDate; }
+        public String getLastDate() { return lastDate; }
+        public String getMessage() { return message; }
+    }
+
+    public static class DailyRow {
+        private final String date;
+        private final String stockId;
+        private final String stockName;
+        private final String open;
+        private final String high;
+        private final String low;
+        private final String close;
+        private final String volume;
+
+        DailyRow(String date, String stockId, String stockName, String open, String high, String low, String close, String volume) {
+            this.date = date;
+            this.stockId = stockId;
+            this.stockName = stockName;
+            this.open = open;
+            this.high = high;
+            this.low = low;
+            this.close = close;
+            this.volume = volume;
+        }
+
+        public String getDate() { return date; }
+        public String getStockId() { return stockId; }
+        public String getStockName() { return stockName; }
+        public String getOpen() { return open; }
+        public String getHigh() { return high; }
+        public String getLow() { return low; }
+        public String getClose() { return close; }
+        public String getVolume() { return volume; }
+    }
+
+    public static class FileFunctionRow {
+        private final String file;
+        private final String feature;
+        private final String diagnostic;
+        private final String status;
+
+        FileFunctionRow(String file, String feature, String diagnostic, String status) {
+            this.file = file;
+            this.feature = feature;
+            this.diagnostic = diagnostic;
+            this.status = status;
+        }
+
+        public String getFile() { return file; }
+        public String getFeature() { return feature; }
+        public String getDiagnostic() { return diagnostic; }
+        public String getStatus() { return status; }
+    }
+
+    public static class FileStatusRow {
+        private final String path;
+        private final String role;
+        private final String status;
+        private final String size;
+        private final String lastModified;
+        private final String note;
+
+        FileStatusRow(String path, String role, String status, String size, String lastModified, String note) {
+            this.path = path;
+            this.role = role;
+            this.status = status;
+            this.size = size;
+            this.lastModified = lastModified;
+            this.note = note;
+        }
+
+        public String getPath() { return path; }
+        public String getRole() { return role; }
+        public String getStatus() { return status; }
+        public String getSize() { return size; }
+        public String getLastModified() { return lastModified; }
+        public String getNote() { return note; }
     }
 }
