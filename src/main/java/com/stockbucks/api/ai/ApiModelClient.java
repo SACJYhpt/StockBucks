@@ -48,16 +48,17 @@ public class ApiModelClient implements ModelClient {
     public String ask(String prompt) {
         String safePrompt = enforceTraditionalChinese(prompt == null ? "" : prompt);
         // 不同供應商的 request body 格式不同，因此在這裡分流。
-        return switch (provider) {
+        String answer = switch (provider) {
             case "anthropic", "claude" -> askAnthropic(safePrompt);
             case "gemini", "google" -> askGemini(safePrompt);
             case "ollama", "local" -> askOllama(safePrompt);
             case "openrouter" -> askChatCompletions(safePrompt, true);
             case "openai-compatible", "compatible", "chat-completions" -> askChatCompletions(safePrompt, false);
             case "openai" -> askOpenAiResponses(safePrompt);
-            default -> "[AI config] Unsupported AI_PROVIDER: " + provider
-                    + ". Use openai, openrouter, openai-compatible, anthropic, gemini, or ollama.";
+            default -> "[AI 設定] 不支援的 AI_PROVIDER：" + provider
+                    + "。請使用 openai、openrouter、openai-compatible、anthropic、gemini 或 ollama。";
         };
+        return normalizeTraditionalChinese(answer);
     }
 
     public String getProvider() {
@@ -362,8 +363,8 @@ public class ApiModelClient implements ModelClient {
     }
 
     private String missingKey(String keyName) {
-        return "[AI config] Missing " + keyName
-                + ". Set it in the OS environment, project .env, stockbucks.env, or ~/.stockbucks/.env.";
+        return "[AI 設定] 缺少 " + keyName
+                + "。請設定在作業系統環境變數、專案 .env、stockbucks.env 或 ~/.stockbucks/.env。";
     }
 
     private String enforceTraditionalChinese(String prompt) {
@@ -372,10 +373,82 @@ public class ApiModelClient implements ModelClient {
                 1. 一律使用繁體中文，並盡量使用台灣常見用語。
                 2. 不要使用簡體字。
                 3. 英文專有名詞、API 名稱、股票代號與程式碼可以保留原文。
+                4. 不要使用 Markdown 粗體符號，不要輸出 **文字** 這種格式。
+                5. 回答保持精簡，每次優先給 3 到 5 個重點。
 
                 使用者內容：
                 %s
                 """.formatted(prompt);
+    }
+
+    private String normalizeTraditionalChinese(String text) {
+        if (text == null || text.isBlank()) {
+            return text;
+        }
+        // 本機小模型偶爾會混入簡體常用字；這裡先做 UI 顯示前的保守修正。
+        String normalized = text
+                .replace("投资", "投資")
+                .replace("股票", "股票")
+                .replace("市场", "市場")
+                .replace("数据", "資料")
+                .replace("资讯", "資訊")
+                .replace("获利", "獲利")
+                .replace("收益", "收益")
+                .replace("风险", "風險")
+                .replace("策略", "策略")
+                .replace("技术", "技術")
+                .replace("分析", "分析")
+                .replace("趋势", "趨勢")
+                .replace("预测", "預測")
+                .replace("价格", "價格")
+                .replace("买入", "買入")
+                .replace("卖出", "賣出")
+                .replace("持有", "持有")
+                .replace("财务", "財務")
+                .replace("报表", "報表")
+                .replace("成长", "成長")
+                .replace("长期", "長期")
+                .replace("短期", "短期")
+                .replace("个股", "個股")
+                .replace("金额", "金額")
+                .replace("帐号", "帳號")
+                .replace("账户", "帳戶")
+                .replace("环境", "環境")
+                .replace("变量", "變數")
+                .replace("设置", "設定")
+                .replace("缺少", "缺少")
+                .replace("无法", "無法")
+                .replace("启用", "啟用")
+                .replace("响应", "回應")
+                .replace("来源", "來源")
+                .replace("实时", "即時")
+                .replace("历史", "歷史")
+                .replace("台湾", "台灣")
+                .replace("证券", "證券")
+                .replace("券商", "券商")
+                .replace("监控", "監控")
+                .replace("总结", "總結")
+                .replace("重点", "重點")
+                .replace("用户", "使用者")
+                .replace("问题", "問題")
+                .replace("回复", "回覆")
+                .replace("默认", "預設")
+                .replace("运行", "執行")
+                .replace("检测", "檢測")
+                .replace("状态", "狀態")
+                .replace("成功", "成功");
+        return removeMarkdownMarks(normalized);
+    }
+
+    private String removeMarkdownMarks(String text) {
+        return text
+                .replace("**", "")
+                .replace("__", "")
+                .replace("###", "")
+                .replace("##", "")
+                .replace("#", "")
+                .replace("`", "")
+                .replace("> ", "");
     }
 
     private String extractOpenAiText(String json) {

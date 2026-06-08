@@ -11,6 +11,7 @@ import com.stockbucks.api.stock.BrokerAccountSnapshot;
 import com.stockbucks.api.stock.BrokerPosition;
 import com.stockbucks.api.stock.IntradayBar;
 import com.stockbucks.api.stock.StockHistoryAttempt;
+import com.stockbucks.api.stock.StockIntradayAttempt;
 import com.stockbucks.api.stock.StockQuote;
 import com.stockbucks.api.stock.StockQuoteAttempt;
 import com.stockbucks.api.stock.StockProfile;
@@ -29,13 +30,13 @@ import java.util.function.Consumer;
  */
 public class AIHub {
     private static final List<String> AI_PROVIDER_FALLBACK_CHAIN = List.of(
-            "gemini",
+            "openai",
             "anthropic",
+            "gemini",
             "openrouter",
-            "ollama",
             "openai-compatible",
-            "openai"
-    ); // AI 失敗時的備援順序，避開單一供應商額度用完就整個不能用。
+            "ollama"
+    ); // AI 失敗時優先改用付費雲端 API，最後才退回本機 Ollama。
 
     private final ModelClient aiClient; // 處理 AI 文字請求。
     private final MarketDataService stockApi; // 處理券商/API/爬蟲/本地 CSV 股票資料。
@@ -57,7 +58,7 @@ public class AIHub {
     public String askAi(String prompt) {
         String firstAnswer = aiClient.ask(prompt);
         if (!shouldFallbackAi(firstAnswer) || !(aiClient instanceof ApiModelClient currentClient)) {
-            return firstAnswer;
+            return cleanAiUiText(withAiResponderLabel(resolveAiProviderName(aiClient), firstAnswer));
         }
 
         StringBuilder attempts = new StringBuilder();
@@ -81,7 +82,8 @@ public class AIHub {
 
             String fallbackAnswer = fallbackClient.ask(prompt);
             if (!shouldFallbackAi(fallbackAnswer)) {
-                return "[AI fallback] 已改用 " + provider + "\n\n" + fallbackAnswer;
+                return cleanAiUiText("AI 已自動改用 " + provider + " 回覆。\n"
+                        + withAiResponderLabel(provider, fallbackAnswer));
             }
             attempts.append(provider)
                     .append("：")
@@ -89,7 +91,7 @@ public class AIHub {
                     .append('\n');
         }
 
-        return "[AI fallback] 所有可嘗試的 AI 來源都無法完成。\n" + attempts;
+        return cleanAiUiText("所有可嘗試的 AI 來源都無法完成。\n" + attempts);
     }
 
     public boolean isAiReady() {
@@ -112,12 +114,12 @@ public class AIHub {
 
     public List<String> getAllAiProviderStatusLines() {
         return List.of(
-                new ApiModelClient("gemini").getShortConfigurationStatus(),
+                new ApiModelClient("openai").getShortConfigurationStatus(),
                 new ApiModelClient("anthropic").getShortConfigurationStatus(),
+                new ApiModelClient("gemini").getShortConfigurationStatus(),
                 new ApiModelClient("openrouter").getShortConfigurationStatus(),
-                new ApiModelClient("ollama").getShortConfigurationStatus(),
                 new ApiModelClient("openai-compatible").getShortConfigurationStatus(),
-                new ApiModelClient("openai").getShortConfigurationStatus()
+                new ApiModelClient("ollama").getShortConfigurationStatus()
         );
     }
 
@@ -130,7 +132,7 @@ public class AIHub {
     }
 
     public StockQuote fetchStockQuote(String stockId) {
-        return stockApi.fetchQuote(stockId); // 依序嘗試：券商 -> Fugle -> 網頁 -> TWSE -> FinMind -> 本地。
+        return stockApi.fetchQuote(stockId); // 依序嘗試：券商 -> Fugle -> 網頁 -> TWSE -> TPEx -> FinMind -> 本地。
     }
 
     public List<StockQuoteAttempt> fetchStockQuoteAttempts(String stockId) {
@@ -163,6 +165,14 @@ public class AIHub {
 
     public List<IntradayBar> fetchBrokerIntradayBars(String stockId, String interval) {
         return stockApi.fetchBrokerIntradayBars(stockId, interval);
+    }
+
+    public List<IntradayBar> fetchBestIntradayBars(String stockId, String interval) {
+        return stockApi.fetchBestIntradayBars(stockId, interval);
+    }
+
+    public List<StockIntradayAttempt> fetchStockIntradayAttempts(String stockId, String interval) {
+        return stockApi.fetchIntradayBarAttempts(stockId, interval);
     }
 
     public String getBrokerStatus() {
@@ -250,7 +260,7 @@ public class AIHub {
                                  String stockId,
                                  double currentPrice,
                                  String question) {
-        return askAi(buildPrompt("Answer the user's stock question.", stockId, currentPrice, historyData, question));
+        return askAi(buildPrompt("回答使用者的股票問題。", stockId, currentPrice, historyData, question));
     }
 
     public String analyzeCurrentMarket(User user,
@@ -258,7 +268,7 @@ public class AIHub {
                                        List<StockData> historyData,
                                        String stockId,
                                        double currentPrice) {
-        return askAi(buildPrompt("Analyze the current stock market data.", stockId, currentPrice, historyData, ""));
+        return askAi(buildPrompt("分析目前股票資料。", stockId, currentPrice, historyData, ""));
     }
 
     public String summarizeTrades(User user,
@@ -266,7 +276,7 @@ public class AIHub {
                                   List<StockData> historyData,
                                   String stockId,
                                   double currentPrice) {
-        return askAi(buildPrompt("Summarize the user's recent stock trading context.", stockId, currentPrice, historyData, ""));
+        return askAi(buildPrompt("整理使用者近期交易狀況。", stockId, currentPrice, historyData, ""));
     }
 
     private String buildPrompt(String task,
@@ -275,22 +285,23 @@ public class AIHub {
                                List<StockData> historyData,
                                String userQuestion) {
         StringBuilder prompt = new StringBuilder();
-        prompt.append(task).append('\n');
-        prompt.append("Stock id: ").append(stockId == null ? "" : stockId).append('\n');
-        prompt.append("Current price: ").append(currentPrice).append('\n');
-        prompt.append("Market mode: ").append(currentMode).append('\n');
+        prompt.append("任務：").append(task).append('\n');
+        prompt.append("股票代號：").append(stockId == null ? "" : stockId).append('\n');
+        prompt.append("目前價格：").append(currentPrice).append('\n');
+        prompt.append("市場模式：").append(currentMode).append('\n');
+        prompt.append("回答要求：請使用繁體中文與台灣常見用語；不要使用簡體字；不要用粗體 Markdown；回答要精簡、可讀、直接。\n");
         if (userQuestion != null && !userQuestion.isBlank()) {
-            prompt.append("Question: ").append(userQuestion).append('\n');
+            prompt.append("使用者問題：").append(userQuestion).append('\n');
         }
 
         if (historyData != null && !historyData.isEmpty()) {
             StockData latest = historyData.get(historyData.size() - 1);
-            prompt.append("Latest history row: ")
-                    .append(latest.getDate()).append(" O=").append(latest.getOpen())
-                    .append(" H=").append(latest.getHigh())
-                    .append(" L=").append(latest.getLow())
-                    .append(" C=").append(latest.getClose())
-                    .append(" V=").append(latest.getVolume())
+            prompt.append("最近一筆歷史資料：日期=").append(latest.getDate())
+                    .append(" 開盤=").append(latest.getOpen())
+                    .append(" 最高=").append(latest.getHigh())
+                    .append(" 最低=").append(latest.getLow())
+                    .append(" 收盤=").append(latest.getClose())
+                    .append(" 成交量=").append(latest.getVolume())
                     .append('\n');
         }
         return prompt.toString();
@@ -301,6 +312,7 @@ public class AIHub {
             return true;
         }
         return answer.contains("[AI config]")
+                || answer.contains("[AI 設定]")
                 || answer.contains("[AI API error]")
                 || answer.contains("[AI API request failed]")
                 || answer.contains("[AI API request interrupted]")
@@ -320,5 +332,31 @@ public class AIHub {
         }
         String firstLine = answer.lines().findFirst().orElse(answer).trim();
         return firstLine.length() > 90 ? firstLine.substring(0, 90) + "..." : firstLine;
+    }
+
+    private String cleanAiUiText(String text) {
+        if (text == null || text.isBlank()) {
+            return text;
+        }
+        return text
+                .replace("**", "")
+                .replace("__", "")
+                .replace("###", "")
+                .replace("##", "")
+                .replace("#", "")
+                .replace("`", "")
+                .replace("> ", "");
+    }
+
+    private String withAiResponderLabel(String provider, String answer) {
+        String name = provider == null || provider.isBlank() ? "custom" : provider;
+        return "回答 AI：" + name + "\n\n" + (answer == null ? "" : answer);
+    }
+
+    private String resolveAiProviderName(ModelClient client) {
+        if (client instanceof ApiModelClient apiClient) {
+            return apiClient.getProvider();
+        }
+        return "custom";
     }
 }

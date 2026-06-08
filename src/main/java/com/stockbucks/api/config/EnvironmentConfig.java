@@ -4,9 +4,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 統一讀取環境設定的工具。
@@ -15,8 +18,9 @@ import java.util.Map;
  * 1. Java system property
  * 2. 作業系統環境變數
  * 3. 專案 .env
- * 4. 專案 stockbucks.env
- * 5. 使用者家目錄 ~/.stockbucks/.env
+ * 4. 專案 stockbucks.local.env
+ * 5. 專案 stockbucks.env
+ * 6. 使用者家目錄 ~/.stockbucks/.env
  */
 public final class EnvironmentConfig {
     private static final Map<String, String> DOTENV = loadDotEnv(); // 啟動時讀一次，避免每次查設定都碰檔案系統。
@@ -82,11 +86,33 @@ public final class EnvironmentConfig {
 
     private static List<Path> candidatePaths() {
         String userHome = System.getProperty("user.home", ".");
-        return List.of(
-                Path.of(".env"),
-                Path.of("stockbucks.env"),
-                Path.of(userHome, ".stockbucks", ".env")
-        );
+        Set<Path> paths = new LinkedHashSet<>();
+        addLocalEnvPaths(paths, Path.of(".").toAbsolutePath().normalize());
+
+        Path projectRoot = findProjectRoot(Path.of(".").toAbsolutePath().normalize());
+        if (projectRoot != null) {
+            addLocalEnvPaths(paths, projectRoot);
+        }
+
+        paths.add(Path.of(userHome, ".stockbucks", ".env"));
+        return new ArrayList<>(paths);
+    }
+
+    private static void addLocalEnvPaths(Set<Path> paths, Path baseDir) {
+        paths.add(baseDir.resolve(".env").normalize());
+        paths.add(baseDir.resolve("stockbucks.local.env").normalize());
+        paths.add(baseDir.resolve("stockbucks.env").normalize());
+    }
+
+    private static Path findProjectRoot(Path start) {
+        Path cursor = start;
+        while (cursor != null) {
+            if (Files.isRegularFile(cursor.resolve("pom.xml"))) {
+                return cursor;
+            }
+            cursor = cursor.getParent();
+        }
+        return null;
     }
 
     private static void parseLine(String line, Map<String, String> values) {

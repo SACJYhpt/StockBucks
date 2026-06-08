@@ -12,13 +12,14 @@ import java.util.TreeMap;
 import java.util.function.Consumer;
 
 /**
- * 股票資料統一入口。
- * 即時報價重視資料時間粒度，歷史資料重視官方完整度，因此兩者使用不同 fallback 順序。
+ * 股票資料來源總控。
+ * 即時/盤中資料優先選最小時間單位；歷史資料先用 TWSE/TPEx 官方日資料，再由 Web、FinMind、本地資料補缺。
  */
 public class MarketDataService {
-    private static final LocalDate DEFAULT_START_DATE = LocalDate.of(2010, 1, 4); // TWSE 可回補較完整日資料。
-    private static final String DEFAULT_PROVIDER_CHAIN = "broker,fugle,web,twse,finmind,local"; // 即時：券商/Fugle/web 優先，TWSE 只是官方備援。
-    private static final String DEFAULT_HISTORY_PROVIDER_CHAIN = "twse,web,finmind,local"; // 歷史：TWSE 打底，web/FinMind/local 補缺日期。
+    private static final LocalDate DEFAULT_START_DATE = LocalDate.of(2010, 1, 4);
+    private static final String DEFAULT_PROVIDER_CHAIN = "broker,fugle,web,twse,tpex,finmind,local";
+    private static final String DEFAULT_HISTORY_PROVIDER_CHAIN = "twse,tpex,web,finmind,local";
+    private static final String DEFAULT_INTRADAY_PROVIDER_CHAIN = "broker,web,fugle,twse,tpex,finmind,local";
 
     private final List<StockDataClient> clients;
     private String lastProviderUsed = "";
@@ -49,8 +50,7 @@ public class MarketDataService {
         Map<String, String> endpoints = new LinkedHashMap<>();
         for (StockDataClient client : clients) {
             client.supportedApiEndpoints().forEach((name, endpoint) ->
-                    endpoints.put(client.getProviderName() + "." + name, endpoint)
-            );
+                    endpoints.put(client.getProviderName() + "." + name, endpoint));
         }
         return endpoints;
     }
@@ -70,33 +70,21 @@ public class MarketDataService {
     public List<StockQuoteAttempt> fetchQuoteAttempts(String stockId) {
         List<StockQuoteAttempt> attempts = new ArrayList<>();
         for (StockDataClient client : clients) {
+            String provider = client.getProviderName();
             if (!client.isConfigured()) {
-                String missing = client.getMissingApiKeyName();
-                attempts.add(new StockQuoteAttempt(
-                        stockId,
-                        client.getProviderName(),
-                        false,
-                        "missing",
-                        missing == null || missing.isBlank() ? "缺少必要設定" : "缺少 " + missing,
-                        null
-                ));
+                attempts.add(new StockQuoteAttempt(stockId, provider, false, "missing",
+                        missingMessage(client.getMissingApiKeyName()), null, providerGranularity(provider), providerRank(provider)));
                 continue;
             }
 
             try {
                 StockQuote quote = client.fetchQuote(stockId);
                 attempts.add(quote == null
-                        ? new StockQuoteAttempt(stockId, client.getProviderName(), true, "no data", "此來源沒有回傳可用報價", null)
-                        : new StockQuoteAttempt(stockId, client.getProviderName(), true, "success", "成功取得資料", quote));
+                        ? new StockQuoteAttempt(stockId, provider, true, "no data", "此來源沒有回傳可用報價", null, providerGranularity(provider), providerRank(provider))
+                        : new StockQuoteAttempt(stockId, provider, true, "success", "成功取得資料", quote, providerGranularity(provider), providerRank(provider)));
             } catch (RuntimeException ex) {
-                attempts.add(new StockQuoteAttempt(
-                        stockId,
-                        client.getProviderName(),
-                        true,
-                        "failed",
-                        cleanErrorMessage(ex),
-                        null
-                ));
+                attempts.add(new StockQuoteAttempt(stockId, provider, true, "failed",
+                        cleanErrorMessage(ex), null, providerGranularity(provider), providerRank(provider)));
             }
         }
         return attempts;
@@ -113,46 +101,106 @@ public class MarketDataService {
     public List<StockHistoryAttempt> fetchDailyHistoryAttempts(String stockId, LocalDate fromDate, LocalDate toDate) {
         List<StockHistoryAttempt> attempts = new ArrayList<>();
         for (StockDataClient client : historyClients()) {
+            String provider = client.getProviderName();
             if (!client.isConfigured()) {
-                String missing = client.getMissingApiKeyName();
-                attempts.add(new StockHistoryAttempt(
-                        stockId,
-                        client.getProviderName(),
-                        false,
-                        "missing",
-                        missing == null || missing.isBlank() ? "缺少必要設定" : "缺少 " + missing,
-                        List.of()
-                ));
+                attempts.add(new StockHistoryAttempt(stockId, provider, false, "missing",
+                        missingMessage(client.getMissingApiKeyName()), List.of(), historyGranularity(provider), historyRank(provider)));
                 continue;
             }
 
             try {
                 List<StockData> data = client.fetchDailyHistory(stockId, fromDate, toDate);
                 attempts.add(data == null || data.isEmpty()
-                        ? new StockHistoryAttempt(stockId, client.getProviderName(), true, "no data", "此來源沒有回傳可用歷史資料", List.of())
-                        : new StockHistoryAttempt(stockId, client.getProviderName(), true, "success", "成功取得歷史資料", data));
+                        ? new StockHistoryAttempt(stockId, provider, true, "no data", "此來源沒有回傳可用歷史資料", List.of(), historyGranularity(provider), historyRank(provider))
+                        : new StockHistoryAttempt(stockId, provider, true, "success", "成功取得歷史資料", data, historyGranularity(provider), historyRank(provider)));
             } catch (RuntimeException ex) {
-                attempts.add(new StockHistoryAttempt(
-                        stockId,
-                        client.getProviderName(),
-                        true,
-                        "failed",
-                        cleanErrorMessage(ex),
-                        List.of()
-                ));
+                attempts.add(new StockHistoryAttempt(stockId, provider, true, "failed",
+                        cleanErrorMessage(ex), List.of(), historyGranularity(provider), historyRank(provider)));
             }
         }
         return attempts;
     }
 
+    public List<StockIntradayAttempt> fetchIntradayBarAttempts(String stockId, String interval) {
+        List<StockIntradayAttempt> attempts = new ArrayList<>();
+        for (StockDataClient client : intradayClients()) {
+            String provider = client.getProviderName();
+            if (!client.isConfigured()) {
+                attempts.add(new StockIntradayAttempt(stockId, provider, false, "missing",
+                        missingMessage(client.getMissingApiKeyName()), List.of(), intradayGranularity(provider, interval), intradayRank(provider)));
+                continue;
+            }
+
+            try {
+                List<IntradayBar> bars = fetchIntradayBarsFromClient(client, stockId, interval);
+                if (bars.isEmpty() && isOfficialDailyProvider(provider)) {
+                    attempts.add(new StockIntradayAttempt(stockId, provider, true, "daily only",
+                            provider.toUpperCase() + " 沒有當天盤中 K 線，只能提供官方日資料備援",
+                            List.of(), "daily", intradayRank(provider)));
+                } else {
+                    attempts.add(bars.isEmpty()
+                            ? new StockIntradayAttempt(stockId, provider, true, "no data", "此來源沒有回傳盤中 K 線", List.of(), intradayGranularity(provider, interval), intradayRank(provider))
+                            : new StockIntradayAttempt(stockId, provider, true, "success", "成功取得盤中 K 線", bars, intradayGranularity(provider, interval), intradayRank(provider)));
+                }
+            } catch (RuntimeException ex) {
+                attempts.add(new StockIntradayAttempt(stockId, provider, true, "failed",
+                        cleanErrorMessage(ex), List.of(), intradayGranularity(provider, interval), intradayRank(provider)));
+            }
+        }
+        return attempts;
+    }
+
+    public List<IntradayBar> fetchBestIntradayBars(String stockId, String interval) {
+        List<String> failures = new ArrayList<>();
+        for (StockIntradayAttempt attempt : fetchIntradayBarAttempts(stockId, interval)) {
+            if ("success".equals(attempt.getStatus()) && !attempt.getBars().isEmpty()) {
+                lastProviderUsed = attempt.getProviderName();
+                lastFallbackReason = String.join("; ", failures);
+                return attempt.getBars();
+            }
+            failures.add(attempt.getProviderName() + " " + attempt.getStatus() + ": " + attempt.getMessage());
+        }
+        lastProviderUsed = "";
+        lastFallbackReason = failures.isEmpty() ? "沒有來源回傳盤中 K 線" : String.join("; ", failures);
+        return List.of();
+    }
+
     public List<StockData> fetchDailyMarketAll() {
-        List<StockData> data = firstSuccessful(historyClients(), StockDataClient::fetchDailyMarketAll);
-        return data == null ? List.of() : data;
+        Map<String, StockData> byStockId = new LinkedHashMap<>();
+        for (StockDataClient client : historyClients()) {
+            if (!client.isConfigured()) {
+                continue;
+            }
+            try {
+                for (StockData data : client.fetchDailyMarketAll()) {
+                    if (data.getStockID() != null && !data.getStockID().isBlank()) {
+                        byStockId.putIfAbsent(data.getStockID(), data);
+                    }
+                }
+            } catch (RuntimeException ignored) {
+                // 全市場資料採互補策略，單一來源失敗時讓下一個來源繼續補。
+            }
+        }
+        return new ArrayList<>(byStockId.values());
     }
 
     public List<StockProfile> getStockProfiles() {
-        List<StockProfile> profiles = firstSuccessful(historyClients(), StockDataClient::fetchListedStockProfiles);
-        return profiles == null ? List.of() : profiles;
+        Map<String, StockProfile> byStockId = new LinkedHashMap<>();
+        for (StockDataClient client : historyClients()) {
+            if (!client.isConfigured()) {
+                continue;
+            }
+            try {
+                for (StockProfile profile : client.fetchListedStockProfiles()) {
+                    if (profile.getStockId() != null && !profile.getStockId().isBlank()) {
+                        byStockId.putIfAbsent(profile.getStockId(), profile);
+                    }
+                }
+            } catch (RuntimeException ignored) {
+                // 股票清單也採互補策略，避免單一市場來源失敗就整批拿不到。
+            }
+        }
+        return new ArrayList<>(byStockId.values());
     }
 
     public List<StockData> getHistoricalData(String stockId) {
@@ -253,6 +301,16 @@ public class MarketDataService {
         return new WebStockScraperClient().fetchRawPage(url);
     }
 
+    private List<IntradayBar> fetchIntradayBarsFromClient(StockDataClient client, String stockId, String interval) {
+        if (client instanceof BrokerAccountClient brokerClient) {
+            return brokerClient.fetchIntradayBars(stockId, interval);
+        }
+        if (client instanceof WebStockScraperClient webClient) {
+            return webClient.fetchIntradayBars(stockId, interval);
+        }
+        return List.of();
+    }
+
     private <T> T firstSuccessful(List<StockDataClient> orderedClients, ClientCall<T> call) {
         List<String> failures = new ArrayList<>();
         for (StockDataClient client : orderedClients) {
@@ -280,11 +338,14 @@ public class MarketDataService {
     }
 
     private List<StockDataClient> historyClients() {
-        String chain = EnvironmentConfig.first(
-                DEFAULT_HISTORY_PROVIDER_CHAIN,
-                "STOCK_HISTORY_PROVIDER_CHAIN",
-                "STOCKBUCKS_STOCK_HISTORY_PROVIDER_CHAIN"
-        );
+        return clientsForChain(EnvironmentConfig.first(DEFAULT_HISTORY_PROVIDER_CHAIN, "STOCK_HISTORY_PROVIDER_CHAIN", "STOCKBUCKS_STOCK_HISTORY_PROVIDER_CHAIN"));
+    }
+
+    private List<StockDataClient> intradayClients() {
+        return clientsForChain(EnvironmentConfig.first(DEFAULT_INTRADAY_PROVIDER_CHAIN, "STOCK_INTRADAY_PROVIDER_CHAIN", "STOCKBUCKS_STOCK_INTRADAY_PROVIDER_CHAIN"));
+    }
+
+    private List<StockDataClient> clientsForChain(String chain) {
         List<StockDataClient> result = new ArrayList<>();
         for (String provider : chain.split(",")) {
             StockDataClient client = findClient(provider.trim());
@@ -342,9 +403,6 @@ public class MarketDataService {
     }
 
     private StockDataClient findClient(String provider) {
-        if (provider == null || provider.isBlank()) {
-            return null;
-        }
         StockDataClient created = createClient(provider);
         if (created == null) {
             return null;
@@ -378,6 +436,68 @@ public class MarketDataService {
             return !list.isEmpty();
         }
         return true;
+    }
+
+    private String missingMessage(String missingKey) {
+        return missingKey == null || missingKey.isBlank() ? "缺少設定" : "缺少 " + missingKey;
+    }
+
+    private boolean isOfficialDailyProvider(String provider) {
+        return "twse".equals(provider) || "tpex".equals(provider);
+    }
+
+    private int providerRank(String provider) {
+        if (provider.startsWith("broker")) return 1;
+        if ("fugle".equals(provider)) return 2;
+        if ("web".equals(provider)) return 3;
+        if ("twse".equals(provider)) return 4;
+        if ("tpex".equals(provider)) return 5;
+        if ("finmind".equals(provider)) return 6;
+        if ("local".equals(provider)) return 7;
+        return 99;
+    }
+
+    private String providerGranularity(String provider) {
+        if (provider.startsWith("broker")) return "tick/hour";
+        if ("fugle".equals(provider)) return "near-realtime";
+        if ("web".equals(provider)) return "near-realtime";
+        if ("twse".equals(provider)) return "daily";
+        if ("tpex".equals(provider)) return "daily";
+        if ("finmind".equals(provider)) return "daily";
+        if ("local".equals(provider)) return "local";
+        return "";
+    }
+
+    private int historyRank(String provider) {
+        if ("twse".equals(provider)) return 1;
+        if ("tpex".equals(provider)) return 2;
+        if ("web".equals(provider)) return 3;
+        if ("finmind".equals(provider)) return 4;
+        if ("local".equals(provider)) return 5;
+        return providerRank(provider);
+    }
+
+    private String historyGranularity(String provider) {
+        if ("local".equals(provider)) return "local";
+        return "daily";
+    }
+
+    private int intradayRank(String provider) {
+        if (provider.startsWith("broker")) return 1;
+        if ("web".equals(provider)) return 2;
+        if ("fugle".equals(provider)) return 3;
+        if ("twse".equals(provider)) return 4;
+        if ("tpex".equals(provider)) return 5;
+        if ("finmind".equals(provider)) return 6;
+        if ("local".equals(provider)) return 7;
+        return 99;
+    }
+
+    private String intradayGranularity(String provider, String interval) {
+        if (provider.startsWith("broker")) return interval == null || interval.isBlank() ? "intraday" : interval;
+        if ("web".equals(provider)) return interval == null || interval.isBlank() ? "1m" : interval;
+        if (isOfficialDailyProvider(provider)) return "daily";
+        return providerGranularity(provider);
     }
 
     private void notifyProgress(Consumer<String> progressCallback, String message) {
@@ -415,6 +535,7 @@ public class MarketDataService {
         }
         if (result.isEmpty()) {
             result.add(new TwseHistoricalDataClient());
+            result.add(new TpexStockDataClient());
             result.add(new LocalFallbackStockDataClient());
         }
         return result;
@@ -428,6 +549,7 @@ public class MarketDataService {
             case "broker", "broker-http", "securities" -> new BrokerHttpStockDataClient();
             case "fugle" -> new FugleStockDataClient();
             case "twse" -> new TwseHistoricalDataClient();
+            case "tpex", "otc" -> new TpexStockDataClient();
             case "web", "scraper", "google", "msn" -> new WebStockScraperClient();
             case "finmind" -> new FinMindStockDataClient();
             case "local", "csv" -> new LocalFallbackStockDataClient();

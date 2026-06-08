@@ -6,6 +6,8 @@ import com.stockbucks.api.config.EnvironmentConfig;
 import com.stockbucks.api.stock.BrokerAccountSnapshot;
 import com.stockbucks.api.stock.BrokerPosition;
 import com.stockbucks.api.stock.IntradayBar;
+import com.stockbucks.api.stock.StockHistoryAttempt;
+import com.stockbucks.api.stock.StockIntradayAttempt;
 import com.stockbucks.api.stock.StockQuote;
 import com.stockbucks.api.stock.StockQuoteAttempt;
 import javafx.application.Application;
@@ -336,6 +338,8 @@ public class ApiDebugDashboard extends Application {
         appendEnvironmentLine(detail, "OLLAMA_EXE_PATH", "Ollama 執行檔路徑", false);
         appendEnvironmentLine(detail, "OLLAMA_MODELS", "Ollama 模型資料夾", false);
         appendEnvironmentLine(detail, "STOCK_PROVIDER_CHAIN", "股票來源排序", true);
+        appendEnvironmentLine(detail, "STOCK_HISTORY_PROVIDER_CHAIN", "歷史資料來源排序", true);
+        appendEnvironmentLine(detail, "STOCK_INTRADAY_PROVIDER_CHAIN", "盤中 K 線來源排序", true);
         appendEnvironmentLine(detail, "BROKER_PROVIDER", "券商 provider 名稱", true);
         appendEnvironmentLine(detail, "BROKER_BASE_URL", "券商 API base URL", false);
         appendEnvironmentLine(detail, "BROKER_USERNAME", "券商帳號", false);
@@ -354,9 +358,12 @@ public class ApiDebugDashboard extends Application {
         appendEnvironmentLine(detail, "FUGLE_BASE_URL", "Fugle base URL", true);
         appendEnvironmentLine(detail, "TWSE_WEB_BASE_URL", "TWSE Web base URL", true);
         appendEnvironmentLine(detail, "TWSE_OPENAPI_BASE_URL", "TWSE OpenAPI base URL", true);
+        appendEnvironmentLine(detail, "TPEX_OPENAPI_BASE_URL", "TPEx OpenAPI base URL", true);
         appendEnvironmentLine(detail, "WEB_STOCK_SOURCES", "網頁爬蟲來源順序", true);
         appendEnvironmentLine(detail, "WEB_STOCK_GOOGLE_URL_TEMPLATE", "Google Finance URL 模板", true);
         appendEnvironmentLine(detail, "WEB_STOCK_YAHOO_URL_TEMPLATE", "Yahoo 股市 URL 模板", true);
+        appendEnvironmentLine(detail, "WEB_STOCK_YAHOO_CHART_URL_TEMPLATE", "Yahoo 歷史日 K URL 模板", true);
+        appendEnvironmentLine(detail, "WEB_STOCK_YAHOO_INTRADAY_URL_TEMPLATE", "Yahoo 盤中 K 線 URL 模板", true);
         appendEnvironmentLine(detail, "WEB_STOCK_CNBC_URL_TEMPLATE", "CNBC URL 模板", true);
         appendEnvironmentLine(detail, "WEB_STOCK_MSN_URL_TEMPLATE", "MSN URL 模板", false);
         appendEnvironmentLine(detail, "WEB_STOCK_WANTGOO_URL_TEMPLATE", "WantGoo URL 模板", true);
@@ -384,6 +391,7 @@ public class ApiDebugDashboard extends Application {
                 appendLine(detail, attempt.getProviderName()
                         + "："
                         + localizeStatus(attempt.getStatus())
+                        + " | 粒度 " + attempt.getDataGranularity()
                         + price
                         + " | "
                         + expectedLabel(symbol, attempt)
@@ -395,10 +403,28 @@ public class ApiDebugDashboard extends Application {
         appendLine(detail, "");
         appendLine(detail, "== 歷史/全市場資料 ==");
         String firstSymbol = symbols.get(0);
+        appendLine(detail, "歷史來源互補 " + firstSymbol + "：");
+        for (StockHistoryAttempt attempt : hub.fetchStockHistoryAttempts(firstSymbol, LocalDate.now().minusDays(10), LocalDate.now())) {
+            appendLine(detail, attempt.getProviderName()
+                    + "：" + localizeStatus(attempt.getStatus())
+                    + " | 粒度 " + attempt.getDataGranularity()
+                    + " | 筆數 " + attempt.getRowCount()
+                    + " | " + displayMessage(attempt.getMessage()));
+        }
         appendCountLine(detail, summary, "歷史資料 " + firstSymbol, () ->
                 hub.fetchStockHistory(firstSymbol, LocalDate.now().minusDays(10), LocalDate.now()).size());
         appendCountLine(detail, summary, "上市股票清單", () -> hub.fetchAllListedStocks().size());
         appendCountLine(detail, summary, "全市場日資料", () -> hub.fetchAllStocksDailyMarket().size());
+
+        appendLine(detail, "");
+        appendLine(detail, "== 盤中 K 線來源 ==");
+        for (StockIntradayAttempt attempt : hub.fetchStockIntradayAttempts(firstSymbol, "1m")) {
+            appendLine(detail, attempt.getProviderName()
+                    + "：" + localizeStatus(attempt.getStatus())
+                    + " | 粒度 " + attempt.getDataGranularity()
+                    + " | 筆數 " + attempt.getBarCount()
+                    + " | " + displayMessage(attempt.getMessage()));
+        }
 
         appendLine(detail, "");
         appendLine(detail, "== 券商 API ==");
@@ -707,6 +733,7 @@ public class ApiDebugDashboard extends Application {
             case "success" -> "成功";
             case "missing" -> "缺少設定";
             case "no data" -> "無資料";
+            case "daily only" -> "只有日資料";
             case "failed" -> "失敗";
             default -> status == null ? "" : status;
         };

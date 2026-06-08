@@ -2,6 +2,7 @@ package com.stockbucks.api.debug;
 
 import com.stockbucks.api.AIHub;
 import com.stockbucks.api.ai.ApiModelClient;
+import com.stockbucks.api.stock.StockIntradayAttempt;
 import com.stockbucks.api.stock.StockHistoryAttempt;
 import com.stockbucks.api.stock.StockQuote;
 
@@ -45,10 +46,14 @@ public final class AiSystemCheck {
             printQuote(hub, args[1]);
         } else if (args.length >= 2 && "history".equalsIgnoreCase(args[0])) {
             printHistory(hub, args[1]);
+        } else if (args.length >= 2 && "intraday".equalsIgnoreCase(args[0])) {
+            String interval = args.length >= 3 ? args[2] : "1m";
+            printIntraday(hub, args[1], interval);
         } else {
             printTitle("測試方式");
             System.out.println("測即時報價：quote 2330");
             System.out.println("測歷史來源：history 2330");
+            System.out.println("測盤中 K 線：intraday 2330 1m");
             System.out.println("測 AI 來源：ai ollama");
         }
     }
@@ -98,6 +103,26 @@ public final class AiSystemCheck {
         String reason = hub.getLastStockFallbackReason();
         if (reason != null && !reason.isBlank()) {
             System.out.println("未使用來源狀態：" + reason);
+        }
+    }
+
+    private static void printIntraday(AIHub hub, String stockId, String interval) {
+        printTitle("盤中 K 線來源測試：" + stockId + " / " + interval);
+        for (StockIntradayAttempt attempt : hub.fetchStockIntradayAttempts(stockId, interval)) {
+            System.out.println(attempt.getProviderName()
+                    + "：" + attempt.getStatus()
+                    + " | 粒度 " + attempt.getDataGranularity()
+                    + " | 筆數 " + attempt.getBarCount()
+                    + " | 時間 " + attempt.getFirstTime() + " ~ " + attempt.getLastTime()
+                    + " | " + attempt.getMessage());
+        }
+
+        System.out.println();
+        System.out.println("最佳盤中 K 筆數：" + hub.fetchBestIntradayBars(stockId, interval).size());
+        System.out.println("最佳來源：" + hub.getLastStockProviderUsed());
+        String reason = hub.getLastStockFallbackReason();
+        if (reason != null && !reason.isBlank()) {
+            System.out.println("fallback 狀態：" + reason);
         }
     }
 

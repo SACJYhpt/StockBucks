@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -31,6 +32,7 @@ public class WebStockScraperClient implements StockDataClient {
     private static final String DEFAULT_GOOGLE_TEMPLATE = "https://www.google.com/finance/quote/%s:TPE?hl=zh-TW";
     private static final String DEFAULT_YAHOO_TEMPLATE = "https://tw.stock.yahoo.com/quote/%s.TW";
     private static final String DEFAULT_YAHOO_CHART_TEMPLATE = "https://query1.finance.yahoo.com/v8/finance/chart/%s.TW?period1=%d&period2=%d&interval=1d";
+    private static final String DEFAULT_YAHOO_INTRADAY_TEMPLATE = "https://query1.finance.yahoo.com/v8/finance/chart/%s.TW?period1=%d&period2=%d&interval=%s";
     private static final String DEFAULT_CNBC_TEMPLATE = "https://www.cnbc.com/quotes/%s.TW";
     private static final String DEFAULT_WANTGOO_TEMPLATE = "https://www.wantgoo.com/stock/%s";
 
@@ -39,6 +41,7 @@ public class WebStockScraperClient implements StockDataClient {
     private final String googleTemplate; // Google Finance 公開報價頁。
     private final String yahooTemplate; // Yahoo 股市公開報價頁。
     private final String yahooChartTemplate; // Yahoo chart JSON，用來補 web 歷史日 K。
+    private final String yahooIntradayTemplate; // Yahoo chart JSON，用來補 web 盤中 K。
     private final String cnbcTemplate; // CNBC 公開報價頁。
     private final String msnTemplate; // 若團隊有穩定 MSN URL 模板，可填這裡。
     private final String wantgooTemplate; // WantGoo 公開股票頁。
@@ -53,6 +56,7 @@ public class WebStockScraperClient implements StockDataClient {
         this.googleTemplate = EnvironmentConfig.first(DEFAULT_GOOGLE_TEMPLATE, "WEB_STOCK_GOOGLE_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_GOOGLE_URL_TEMPLATE");
         this.yahooTemplate = EnvironmentConfig.first(DEFAULT_YAHOO_TEMPLATE, "WEB_STOCK_YAHOO_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_YAHOO_URL_TEMPLATE");
         this.yahooChartTemplate = EnvironmentConfig.first(DEFAULT_YAHOO_CHART_TEMPLATE, "WEB_STOCK_YAHOO_CHART_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_YAHOO_CHART_URL_TEMPLATE");
+        this.yahooIntradayTemplate = EnvironmentConfig.first(DEFAULT_YAHOO_INTRADAY_TEMPLATE, "WEB_STOCK_YAHOO_INTRADAY_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_YAHOO_INTRADAY_URL_TEMPLATE");
         this.cnbcTemplate = EnvironmentConfig.first(DEFAULT_CNBC_TEMPLATE, "WEB_STOCK_CNBC_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_CNBC_URL_TEMPLATE");
         this.msnTemplate = EnvironmentConfig.first("", "WEB_STOCK_MSN_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_MSN_URL_TEMPLATE");
         this.wantgooTemplate = EnvironmentConfig.first(DEFAULT_WANTGOO_TEMPLATE, "WEB_STOCK_WANTGOO_URL_TEMPLATE", "STOCKBUCKS_WEB_STOCK_WANTGOO_URL_TEMPLATE");
@@ -138,6 +142,7 @@ public class WebStockScraperClient implements StockDataClient {
         endpoints.put("googleFinanceQuote", googleTemplate);
         endpoints.put("yahooTwQuote", yahooTemplate);
         endpoints.put("yahooChartHistory", yahooChartTemplate);
+        endpoints.put("yahooIntradayBars", yahooIntradayTemplate);
         endpoints.put("cnbcQuote", cnbcTemplate);
         if (!msnTemplate.isBlank()) {
             endpoints.put("msnMoneyQuote", msnTemplate);
@@ -148,6 +153,10 @@ public class WebStockScraperClient implements StockDataClient {
 
     public String fetchRawPage(String url) {
         return get(url);
+    }
+
+    public List<IntradayBar> fetchIntradayBars(String stockId, String interval) {
+        return fetchYahooChartIntraday(stockId, interval);
     }
 
     private StockQuote fetchGoogleFinanceQuote(String stockId) {
@@ -297,6 +306,81 @@ public class WebStockScraperClient implements StockDataClient {
             ));
         }
         return result;
+    }
+
+    private List<IntradayBar> fetchYahooChartIntraday(String stockId, String interval) {
+        if (stockId == null || stockId.isBlank() || yahooIntradayTemplate.isBlank()) {
+            return List.of();
+        }
+
+        String yahooInterval = normalizeYahooInterval(interval);
+        LocalDateTime end = LocalDateTime.now();
+        LocalDateTime start = end.minusDays(intradayLookbackDays(yahooInterval));
+        long period1 = start.atZone(ZoneId.systemDefault()).toEpochSecond();
+        long period2 = end.atZone(ZoneId.systemDefault()).toEpochSecond();
+        String symbol = stockId.replaceAll("\\.(TW|TWO|TPE)$", "");
+        String url = yahooIntradayTemplate.formatted(
+                URLEncoder.encode(symbol, StandardCharsets.UTF_8),
+                period1,
+                period2,
+                yahooInterval
+        );
+        String json = get(url);
+        if (json.isBlank() || json.contains("\"error\":{\"code\"")) {
+            return List.of();
+        }
+
+        List<String> timestamps = csvArrayAfter(json, "\"timestamp\"");
+        String quoteObject = firstRegex(json, "\"quote\"\\s*:\\s*\\[\\s*\\{(.*?)\\}\\s*\\]");
+        List<String> opens = csvArrayAfter(quoteObject, "\"open\"");
+        List<String> highs = csvArrayAfter(quoteObject, "\"high\"");
+        List<String> lows = csvArrayAfter(quoteObject, "\"low\"");
+        List<String> closes = csvArrayAfter(quoteObject, "\"close\"");
+        List<String> volumes = csvArrayAfter(quoteObject, "\"volume\"");
+
+        int rows = minSize(timestamps, opens, highs, lows, closes, volumes);
+        List<IntradayBar> result = new ArrayList<>();
+        for (int i = 0; i < rows; i++) {
+            if (isNullPrice(opens.get(i)) || isNullPrice(highs.get(i)) || isNullPrice(lows.get(i)) || isNullPrice(closes.get(i))) {
+                continue;
+            }
+
+            LocalDateTime time = Instant.ofEpochSecond(Long.parseLong(timestamps.get(i).trim()))
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDateTime();
+            result.add(new IntradayBar(
+                    symbol,
+                    time,
+                    JsonText.parseDouble(opens.get(i)),
+                    JsonText.parseDouble(highs.get(i)),
+                    JsonText.parseDouble(lows.get(i)),
+                    JsonText.parseDouble(closes.get(i)),
+                    JsonText.parseLong(volumes.get(i)),
+                    "web:yahoo-chart"
+            ));
+        }
+        return result;
+    }
+
+    private String normalizeYahooInterval(String interval) {
+        String normalized = interval == null || interval.isBlank() ? "1m" : interval.trim().toLowerCase();
+        return switch (normalized) {
+            case "1", "1m", "minute" -> "1m";
+            case "5", "5m" -> "5m";
+            case "15", "15m" -> "15m";
+            case "30", "30m" -> "30m";
+            case "60", "60m", "1h", "hour" -> "1h";
+            default -> "1m";
+        };
+    }
+
+    private int intradayLookbackDays(String interval) {
+        // Yahoo 盤中資料在假日或收盤後可能切換保留區間，抓寬一點比較容易拿到最近交易日。
+        return switch (interval) {
+            case "1m" -> 5;
+            case "5m", "15m", "30m" -> 10;
+            default -> 30;
+        };
     }
 
     private String get(String url) {
