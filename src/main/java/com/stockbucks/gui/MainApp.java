@@ -2616,18 +2616,41 @@ private javafx.collections.ObservableList<SettlementManager.Settlement> observab
     }
 
     private void exportListToTxt(File file, List <Order> orders) {
+        if (orders == null || orders.isEmpty()) {
+            System.out.println("⚠️ 匯出失敗：沒有任何訂單資料可供匯出。");
+            return;
+        }
+
         try (java.io.FileWriter fw = new java.io.FileWriter(file);
             java.io.PrintWriter pw = new java.io.PrintWriter(fw)) {
             pw.println("=========================================================================");
             pw.println("                StockBucks 擬真股票交易系統 - 歷史對帳單明細               ");
             pw.println("=========================================================================");
             for (Order o : orders) {
-                pw.printf("日期: %s | 股票: %s | 動作: %s | 限價: %.2f | 股數: %d | 狀態: %s| 手續費: %.2f | 證交稅: %.2f | 交割金額: %s\n",
-                        o.getDate(), o.getStockID(), o.isBuy() ? "買入" : "賣出", o.getLimitPrice(), o.getShares(), o.getStatus(), o.getCommission(), o.getTax(), o.getTotalSettlementAmount());
+                if (o == null) continue;
+
+                pw.printf("時間: %s (%s) | 股票: %s | 動作: %s | 委託價: %,.2f | 股數: %,d | 狀態: %s | 手續費: %,d | 證交稅: %,d  | 交割金額: %,.2f \n",
+                        o.getDate(), 
+                        o.getTime(), 
+                        o.getStockID(), 
+                        o.isBuy() ? "買入" : "賣出", 
+                        o.getLimitPrice(), 
+                        o.getShares(), 
+                        o.getStatus(), 
+                        o.getCommission(), 
+                        o.getTax(), 
+                        o.getTotalSettlementAmount()
+                );
             }
             pw.println("=========================================================================");
             pw.println("匯出時間: " + java.time.LocalDateTime.now());
+            System.out.println("✨ 歷史對帳單已成功匯出至: " + file.getAbsolutePath());
+            showNotification("✨ 歷史對帳單已成功匯出至: " + file.getAbsolutePath(), "INFO");
         } catch (IOException e) {
+            System.err.println("❌ 寫入 TXT 檔案時發生 I/O 錯誤:");
+            e.printStackTrace();
+        } catch (Exception e) {
+            System.err.println("❌ 執行匯出時發生預期外的錯誤(可能是轉型或空指標)：");
             e.printStackTrace();
         }
     }
