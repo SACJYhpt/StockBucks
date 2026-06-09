@@ -99,6 +99,10 @@ public final class AiSystemCheck {
 
         System.out.println();
         System.out.println("合併後筆數：" + hub.fetchStockHistory(stockId, fromDate, toDate).size());
+        System.out.println("日期調整：" + hub.describeHistoryDateAdjustment(fromDate, toDate));
+        System.out.println("今天是否可能開盤：" + (hub.isPotentialTradingDay(toDate) ? "是" : "否，會自動跳過"));
+        LocalDate availableDate = hub.resolveAvailableHistoryDate(stockId, toDate);
+        System.out.println("最近可用交易日：" + (availableDate == null ? "找不到" : availableDate));
         System.out.println("合併來源：" + hub.getLastStockProviderUsed());
         String reason = hub.getLastStockFallbackReason();
         if (reason != null && !reason.isBlank()) {

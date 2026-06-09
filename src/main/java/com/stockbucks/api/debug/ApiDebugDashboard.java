@@ -75,6 +75,7 @@ public class ApiDebugDashboard extends Application {
     private TextField historySymbolField;
     private TextField historyFromDateField;
     private TextField historyToDateField;
+    private Label historyDateLabel;
     private TextField aiPromptField;
     private TextArea overviewArea;
     private TextArea environmentArea;
@@ -262,6 +263,7 @@ public class ApiDebugDashboard extends Application {
                 new Label("迄："), historyToDateField,
                 refresh
         );
+        historyDateLabel = sectionTitle("交易日診斷：等待資料");
 
         TableView<HistorySourceRow> sourceTable = table(historySourceRows);
         addColumn(sourceTable, "來源", "provider", 130);
@@ -283,7 +285,7 @@ public class ApiDebugDashboard extends Application {
         addColumn(dataTable, "收", "close", 80);
         addColumn(dataTable, "量", "volume", 110);
         VBox.setVgrow(dataTable, Priority.ALWAYS);
-        return pane(toolbar, sectionTitle("來源診斷"), sourceTable, sectionTitle("合併後日資料前 80 筆"), dataTable);
+        return pane(toolbar, historyDateLabel, sectionTitle("來源診斷"), sourceTable, sectionTitle("合併後日資料前 80 筆"), dataTable);
     }
 
     private VBox createEnvironmentPane() {
@@ -327,7 +329,7 @@ public class ApiDebugDashboard extends Application {
             text.append("股票來源：").append(providerSummary()).append('\n');
             text.append("上市股票清單：").append(safeCount(() -> hub.fetchAllListedStocks().size())).append(" 筆\n");
             text.append("全市場日資料：").append(safeCount(() -> hub.fetchAllStocksDailyMarket().size())).append(" 筆\n");
-            text.append("本地市場資料庫：").append(hub.getMarketDatabasePath().isBlank() ? "未啟用正式儲存" : hub.getMarketDatabasePath()).append('\n');
+            text.append("API 股票快取：").append(hub.getStockCacheStatus()).append('\n');
             text.append('\n');
             text.append("== 建議先看 ==\n");
             text.append("1. 報價來源：確認每檔股票實際走哪個 provider。\n");
@@ -365,6 +367,7 @@ public class ApiDebugDashboard extends Application {
                 rows.add(fileStatus(Path.of(".env"), "通用環境檔", "若存在，優先於 stockbucks.local.env 讀取"));
                 rows.add(fileStatus(Path.of("src", "main", "java", "com", "stockbucks", "api", "config", "stockbucks.env.example"), "環境範本", "給其他電腦照著建立自己的 env"));
 
+                rows.addAll(scanFolder(Path.of("saves"), "模擬存檔目錄"));
                 rows.addAll(scanFolder(Path.of("data"), "資料目錄"));
                 rows.addAll(scanFolder(Path.of("data", "api_cache"), "API 快取目錄"));
                 rows.addAll(scanFolder(Path.of("logs"), "執行紀錄目錄"));
@@ -468,7 +471,9 @@ public class ApiDebugDashboard extends Application {
                         .limit(80)
                         .map(this::toDailyRow)
                         .toList();
-                return new HistoryResult(sources, rows);
+                LocalDate availableDate = hub.resolveAvailableHistoryDate(symbol, toDate);
+                return new HistoryResult(sources, rows, fromDate, toDate, availableDate,
+                        hub.isPotentialTradingDay(toDate), hub.describeHistoryDateAdjustment(fromDate, toDate));
             }
 
             private DailyRow toDailyRow(StockData data) {
@@ -487,10 +492,12 @@ public class ApiDebugDashboard extends Application {
         task.setOnSucceeded(event -> {
             historySourceRows.setAll(task.getValue().sources());
             dailyRows.setAll(task.getValue().dailyRows());
+            updateHistoryDateLabel(task.getValue());
         });
         task.setOnFailed(event -> {
             historySourceRows.setAll(List.of(new HistorySourceRow("", "失敗", "", "", "", "", message(task.getException()))));
             dailyRows.clear();
+            historyDateLabel.setText("交易日診斷：檢查失敗");
         });
         new Thread(task, "stockbucks-debug-history").start();
     }
@@ -568,14 +575,15 @@ public class ApiDebugDashboard extends Application {
         StringBuilder text = new StringBuilder();
         text.append("== 本地儲存診斷 ==\n");
         String path = hub.getMarketDatabasePath();
-        if (path == null || path.isBlank()) {
-            text.append("股票資料：未啟用正式本地儲存。\n");
-            text.append("AI 回覆：未啟用正式對話紀錄儲存。\n");
-            text.append("目前資料主要是即時查詢後直接回傳給 UI。\n");
-        } else {
-            text.append("市場資料庫：").append(path).append('\n');
-        }
-        text.append("\n建議之後可在 API 範圍新增 data/api_cache，用 jsonl 保存報價、K 線、歷史資料與 AI 回覆。\n");
+        text.append("模擬進度：有本地存檔，SaveData 是資料容器，SaveManager 會寫入 saves/*.dat。\n");
+        text.append("自選股：MainApp 存檔時會一起放進 SaveData。\n");
+        text.append("API 股票快取：").append(hub.getStockCacheStatus()).append('\n');
+        text.append("快取資料夾：").append(path == null || path.isBlank() ? "未設定" : path).append('\n');
+        text.append("股票報價：會先讀快取，過期或不存在才重新抓。\n");
+        text.append("盤中 K 線：會先讀快取，加速 K 線圖表開啟。\n");
+        text.append("歷史資料：會先讀快取，加速區間資料查詢。\n");
+        text.append("AI 回覆：目前仍未保存對話紀錄。\n");
+        text.append("\n注意：沒有把大量行情塞進同學的 SaveData，避免舊存檔相容性問題。\n");
         return text.toString();
     }
 
@@ -724,6 +732,18 @@ public class ApiDebugDashboard extends Application {
             return top + plotHeight;
         }
         return top + (max - price) / (max - min) * plotHeight;
+    }
+
+    private void updateHistoryDateLabel(HistoryResult result) {
+        if (historyDateLabel == null || result == null) {
+            return;
+        }
+        String marketDay = result.toDatePotentialTradingDay() ? "可能開盤日" : "週末，已自動跳過";
+        String available = result.availableDate() == null ? "找不到可用交易日" : result.availableDate().toString();
+        historyDateLabel.setText("交易日診斷：查詢 " + result.fromDate() + " 到 " + result.toDate()
+                + "；結束日狀態：" + marketDay
+                + "；最近可用資料日：" + available
+                + "；" + result.adjustmentMessage());
     }
 
     private void appendEnv(StringBuilder text, String key, boolean optionalDefault) {
@@ -905,6 +925,9 @@ public class ApiDebugDashboard extends Application {
         if (name.endsWith(".csv")) {
             return "CSV 歷史或備援資料";
         }
+        if (name.endsWith(".dat")) {
+            return "SaveManager 模擬進度存檔";
+        }
         if (name.endsWith(".json") || name.endsWith(".jsonl")) {
             return "API 回應或快取資料";
         }
@@ -993,7 +1016,13 @@ public class ApiDebugDashboard extends Application {
         new Thread(task, "stockbucks-debug-text").start();
     }
 
-    private record HistoryResult(List<HistorySourceRow> sources, List<DailyRow> dailyRows) {
+    private record HistoryResult(List<HistorySourceRow> sources,
+                                 List<DailyRow> dailyRows,
+                                 LocalDate fromDate,
+                                 LocalDate toDate,
+                                 LocalDate availableDate,
+                                 boolean toDatePotentialTradingDay,
+                                 String adjustmentMessage) {
     }
 
     private record IntradayResult(List<IntradayRow> rows,

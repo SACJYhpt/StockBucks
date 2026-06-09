@@ -131,6 +131,18 @@ public class AIHub {
         return stockApi.fetchDailyHistoryAttempts(stockId, fromDate, toDate); // 給同學/debug 查每個歷史來源的資料量與狀態。
     }
 
+    public LocalDate resolveAvailableHistoryDate(String stockId, LocalDate targetDate) {
+        return stockApi.resolveAvailableHistoryDate(stockId, targetDate); // 選到週末或休市日時，找最近一個有歷史資料的交易日。
+    }
+
+    public boolean isPotentialTradingDay(LocalDate date) {
+        return stockApi.isPotentialTradingDay(date); // 先排除週末；特殊休市日由 resolveAvailableHistoryDate 依實際資料修正。
+    }
+
+    public String describeHistoryDateAdjustment(LocalDate fromDate, LocalDate toDate) {
+        return stockApi.describeHistoryDateAdjustment(fromDate, toDate); // 告訴使用者是否有自動跳過非交易日。
+    }
+
     public StockQuote fetchStockQuote(String stockId) {
         return stockApi.fetchQuote(stockId); // 依序嘗試：券商 -> Fugle -> 網頁 -> TWSE -> TPEx -> FinMind -> 本地。
     }
@@ -200,7 +212,11 @@ public class AIHub {
     }
 
     public String getMarketDatabasePath() {
-        return ""; // 已移除資料庫快取；目前 AI 資料改走 API 與備援來源。
+        return stockApi.getCacheDirectory(); // API 股票快取資料夾；不是同學的 SaveData 模擬存檔。
+    }
+
+    public String getStockCacheStatus() {
+        return stockApi.getCacheStatus(); // DEBUG/UI 顯示目前股票快取是否啟用與 TTL。
     }
 
     public void setMarketMode(MarketMode mode) {

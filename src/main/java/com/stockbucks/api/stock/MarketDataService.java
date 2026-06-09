@@ -3,6 +3,7 @@ package com.stockbucks.api.stock;
 import com.stockbucks.StockData;
 import com.stockbucks.api.config.EnvironmentConfig;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -22,6 +23,7 @@ public class MarketDataService {
     private static final String DEFAULT_INTRADAY_PROVIDER_CHAIN = "broker,web,fugle,twse,tpex,finmind,local";
 
     private final List<StockDataClient> clients;
+    private final StockDataCache cache;
     private String lastProviderUsed = "";
     private String lastFallbackReason = "";
 
@@ -35,6 +37,7 @@ public class MarketDataService {
 
     public MarketDataService(List<StockDataClient> clients) {
         this.clients = clients == null || clients.isEmpty() ? defaultClients() : List.copyOf(clients);
+        this.cache = new StockDataCache();
     }
 
     public Map<String, String> providerStatus() {
@@ -64,7 +67,15 @@ public class MarketDataService {
     }
 
     public StockQuote fetchQuote(String stockId) {
-        return firstSuccessful(clients, client -> client.fetchQuote(stockId));
+        StockQuote cached = cache.getQuote(stockId).orElse(null);
+        if (cached != null) {
+            lastProviderUsed = cached.getProvider() + ":cache";
+            lastFallbackReason = "使用 API 股票快取，加速報價讀取。";
+            return cached;
+        }
+        StockQuote quote = firstSuccessful(clients, client -> client.fetchQuote(stockId));
+        cache.putQuote(quote);
+        return quote;
     }
 
     public List<StockQuoteAttempt> fetchQuoteAttempts(String stockId) {
@@ -91,15 +102,74 @@ public class MarketDataService {
     }
 
     public List<StockData> fetchDailyHistory(String stockId, LocalDate fromDate, LocalDate toDate) {
-        List<StockHistoryAttempt> attempts = fetchDailyHistoryAttempts(stockId, fromDate, toDate);
-        List<StockData> merged = mergeHistoryAttempts(attempts);
+        LocalDate adjustedFromDate = nextPotentialTradingDay(fromDate);
+        LocalDate adjustedToDate = previousPotentialTradingDay(toDate);
+        if (adjustedFromDate == null || adjustedToDate == null || adjustedFromDate.isAfter(adjustedToDate)) {
+            lastProviderUsed = "";
+            lastFallbackReason = describeHistoryDateAdjustment(fromDate, toDate);
+            return List.of();
+        }
+
+        List<StockData> cached = cache.getHistory(stockId, adjustedFromDate, adjustedToDate).orElse(List.of());
+        if (historyCacheCoversRange(cached, adjustedFromDate, adjustedToDate)) {
+            lastProviderUsed = "cache(" + cached.size() + ")";
+            lastFallbackReason = describeHistoryDateAdjustment(fromDate, toDate) + " 使用完整 API 歷史資料快取。";
+            return cached;
+        }
+
+        List<StockHistoryAttempt> attempts;
+        if (cached.isEmpty()) {
+            attempts = fetchDailyHistoryAttempts(stockId, fromDate, toDate);
+        } else {
+            attempts = fetchMissingHistoryAttempts(stockId, adjustedFromDate, adjustedToDate, cached);
+        }
+        List<StockData> merged = mergeHistoryRows(cached, mergeHistoryAttempts(attempts));
         lastProviderUsed = historyProviderSummary(attempts);
-        lastFallbackReason = historyFallbackSummary(attempts);
+        lastFallbackReason = describeHistoryDateAdjustment(fromDate, toDate)
+                + (cached.isEmpty() ? "" : " 已先使用本地快取 " + cached.size() + " 筆，只補抓缺少區間。")
+                + historyFallbackSummary(attempts);
+        cache.putHistory(stockId, adjustedFromDate, adjustedToDate, merged);
         return merged;
+    }
+
+    private List<StockHistoryAttempt> fetchMissingHistoryAttempts(String stockId,
+                                                                  LocalDate fromDate,
+                                                                  LocalDate toDate,
+                                                                  List<StockData> cached) {
+        LocalDate firstCachedDate = firstHistoryDate(cached);
+        LocalDate lastCachedDate = lastHistoryDate(cached);
+        List<StockHistoryAttempt> attempts = new ArrayList<>();
+
+        if (firstCachedDate != null && firstCachedDate.isAfter(fromDate)) {
+            LocalDate missingEnd = previousPotentialTradingDay(firstCachedDate.minusDays(1));
+            if (missingEnd != null && !missingEnd.isBefore(fromDate)) {
+                attempts.addAll(fetchDailyHistoryAttempts(stockId, fromDate, missingEnd));
+            }
+        }
+
+        if (lastCachedDate != null && lastCachedDate.isBefore(toDate)) {
+            LocalDate missingStart = nextPotentialTradingDay(lastCachedDate.plusDays(1));
+            if (missingStart != null && !missingStart.isAfter(toDate)) {
+                attempts.addAll(fetchDailyHistoryAttempts(stockId, missingStart, toDate));
+            }
+        }
+
+        if (attempts.isEmpty()) {
+            attempts.add(new StockHistoryAttempt(stockId, "cache", true, "success",
+                    "本地快取已覆蓋主要區間，沒有額外補抓", cached, "daily", Integer.MAX_VALUE));
+        }
+        return attempts;
     }
 
     public List<StockHistoryAttempt> fetchDailyHistoryAttempts(String stockId, LocalDate fromDate, LocalDate toDate) {
         List<StockHistoryAttempt> attempts = new ArrayList<>();
+        LocalDate adjustedFromDate = nextPotentialTradingDay(fromDate);
+        LocalDate adjustedToDate = previousPotentialTradingDay(toDate);
+        if (adjustedFromDate == null || adjustedToDate == null || adjustedFromDate.isAfter(adjustedToDate)) {
+            return List.of(new StockHistoryAttempt(stockId, "calendar", true, "no data",
+                    "查詢區間沒有可用交易日，已自動跳過週末或休市日",
+                    List.of(), "daily", Integer.MAX_VALUE));
+        }
         for (StockDataClient client : historyClients()) {
             String provider = client.getProviderName();
             if (!client.isConfigured()) {
@@ -109,7 +179,7 @@ public class MarketDataService {
             }
 
             try {
-                List<StockData> data = client.fetchDailyHistory(stockId, fromDate, toDate);
+                List<StockData> data = client.fetchDailyHistory(stockId, adjustedFromDate, adjustedToDate);
                 attempts.add(data == null || data.isEmpty()
                         ? new StockHistoryAttempt(stockId, provider, true, "no data", "此來源沒有回傳可用歷史資料", List.of(), historyGranularity(provider), historyRank(provider))
                         : new StockHistoryAttempt(stockId, provider, true, "success", "成功取得歷史資料", data, historyGranularity(provider), historyRank(provider)));
@@ -119,6 +189,49 @@ public class MarketDataService {
             }
         }
         return attempts;
+    }
+
+    public String describeHistoryDateAdjustment(LocalDate fromDate, LocalDate toDate) {
+        LocalDate adjustedFromDate = nextPotentialTradingDay(fromDate);
+        LocalDate adjustedToDate = previousPotentialTradingDay(toDate);
+        if (adjustedFromDate == null || adjustedToDate == null || adjustedFromDate.isAfter(adjustedToDate)) {
+            return "查詢區間沒有可用交易日，已跳過週末或休市日。";
+        }
+
+        List<String> notes = new ArrayList<>();
+        if (!adjustedFromDate.equals(fromDate)) {
+            notes.add("起始日 " + fromDate + " 非交易日，已改查 " + adjustedFromDate);
+        }
+        if (!adjustedToDate.equals(toDate)) {
+            notes.add("結束日 " + toDate + " 非交易日，已改查 " + adjustedToDate);
+        }
+        return notes.isEmpty()
+                ? "查詢區間未跳過日期。"
+                : "已自動跳過非交易日：" + String.join("；", notes) + "。";
+    }
+
+    public LocalDate resolveAvailableHistoryDate(String stockId, LocalDate targetDate) {
+        if (stockId == null || stockId.isBlank() || targetDate == null) {
+            return null;
+        }
+
+        LocalDate searchEnd = previousPotentialTradingDay(targetDate);
+        if (searchEnd == null) {
+            return null;
+        }
+        LocalDate searchStart = searchEnd.minusDays(21);
+        List<StockData> history = fetchDailyHistory(stockId, searchStart, searchEnd);
+        LocalDate best = null;
+        for (StockData data : history) {
+            LocalDate date = parseHistoryDate(data.getDate());
+            if (date == null || date.isAfter(targetDate)) {
+                continue;
+            }
+            if (best == null || date.isAfter(best)) {
+                best = date;
+            }
+        }
+        return best;
     }
 
     public List<StockIntradayAttempt> fetchIntradayBarAttempts(String stockId, String interval) {
@@ -151,11 +264,18 @@ public class MarketDataService {
     }
 
     public List<IntradayBar> fetchBestIntradayBars(String stockId, String interval) {
+        List<IntradayBar> cached = cache.getIntraday(stockId, interval).orElse(null);
+        if (cached != null) {
+            lastProviderUsed = "cache";
+            lastFallbackReason = "使用 API 盤中 K 線快取，加速圖表讀取。";
+            return cached;
+        }
         List<String> failures = new ArrayList<>();
         for (StockIntradayAttempt attempt : fetchIntradayBarAttempts(stockId, interval)) {
             if ("success".equals(attempt.getStatus()) && !attempt.getBars().isEmpty()) {
                 lastProviderUsed = attempt.getProviderName();
                 lastFallbackReason = String.join("; ", failures);
+                cache.putIntraday(stockId, interval, attempt.getBars());
                 return attempt.getBars();
             }
             failures.add(attempt.getProviderName() + " " + attempt.getStatus() + ": " + attempt.getMessage());
@@ -163,6 +283,14 @@ public class MarketDataService {
         lastProviderUsed = "";
         lastFallbackReason = failures.isEmpty() ? "沒有來源回傳盤中 K 線" : String.join("; ", failures);
         return List.of();
+    }
+
+    public String getCacheStatus() {
+        return cache.status();
+    }
+
+    public String getCacheDirectory() {
+        return cache.cacheDir().toString();
     }
 
     public List<StockData> fetchDailyMarketAll() {
@@ -372,6 +500,49 @@ public class MarketDataService {
         return new ArrayList<>(byDate.values());
     }
 
+    private List<StockData> mergeHistoryRows(List<StockData> firstRows, List<StockData> secondRows) {
+        Map<String, StockData> byDate = new TreeMap<>();
+        for (StockData row : firstRows) {
+            if (row.getDate() != null && !row.getDate().isBlank()) {
+                byDate.put(normalizeHistoryDate(row.getDate()), row);
+            }
+        }
+        for (StockData row : secondRows) {
+            if (row.getDate() != null && !row.getDate().isBlank()) {
+                byDate.put(normalizeHistoryDate(row.getDate()), row);
+            }
+        }
+        return new ArrayList<>(byDate.values());
+    }
+
+    private boolean historyCacheCoversRange(List<StockData> cached, LocalDate fromDate, LocalDate toDate) {
+        LocalDate first = firstHistoryDate(cached);
+        LocalDate last = lastHistoryDate(cached);
+        return first != null && last != null && !first.isAfter(fromDate) && !last.isBefore(toDate);
+    }
+
+    private LocalDate firstHistoryDate(List<StockData> rows) {
+        LocalDate first = null;
+        for (StockData row : rows) {
+            LocalDate date = parseHistoryDate(row.getDate());
+            if (date != null && (first == null || date.isBefore(first))) {
+                first = date;
+            }
+        }
+        return first;
+    }
+
+    private LocalDate lastHistoryDate(List<StockData> rows) {
+        LocalDate last = null;
+        for (StockData row : rows) {
+            LocalDate date = parseHistoryDate(row.getDate());
+            if (date != null && (last == null || date.isAfter(last))) {
+                last = date;
+            }
+        }
+        return last;
+    }
+
     private String normalizeHistoryDate(String value) {
         String trimmed = value == null ? "" : value.trim();
         if (trimmed.matches("\\d{4}/\\d{1,2}/\\d{1,2}")) {
@@ -379,6 +550,48 @@ public class MarketDataService {
             return "%s-%02d-%02d".formatted(parts[0], Integer.parseInt(parts[1]), Integer.parseInt(parts[2]));
         }
         return trimmed;
+    }
+
+    public boolean isPotentialTradingDay(LocalDate date) {
+        if (date == null) {
+            return false;
+        }
+        DayOfWeek day = date.getDayOfWeek();
+        return day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;
+    }
+
+    private LocalDate nextPotentialTradingDay(LocalDate date) {
+        if (date == null) {
+            return null;
+        }
+        LocalDate cursor = date;
+        while (!isPotentialTradingDay(cursor)) {
+            cursor = cursor.plusDays(1);
+        }
+        return cursor;
+    }
+
+    private LocalDate previousPotentialTradingDay(LocalDate date) {
+        if (date == null) {
+            return null;
+        }
+        LocalDate cursor = date;
+        while (!isPotentialTradingDay(cursor)) {
+            cursor = cursor.minusDays(1);
+        }
+        return cursor;
+    }
+
+    private LocalDate parseHistoryDate(String value) {
+        String normalized = normalizeHistoryDate(value);
+        if (normalized.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(normalized);
+        } catch (RuntimeException ex) {
+            return null;
+        }
     }
 
     private String historyProviderSummary(List<StockHistoryAttempt> attempts) {
