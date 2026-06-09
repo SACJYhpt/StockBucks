@@ -9,9 +9,9 @@
   <h3 align="center">STOCKBUCKS</h3>
 
   <p align="center">
-    An awesome README template to jumpstart your projects!
+    一款多功能的股市模擬交易系統
     <br />
-    <a href="https://github.com/othneildrew/Best-README-Template"><strong>Explore the docs »</strong></a>
+    <a href="https://github.com/SACJYhpt/StockBucks"><strong>Explore the docs »</strong></a>
     <br />
     <br />
     <a href="https://github.com/othneildrew/Best-README-Template">View Demo</a>
@@ -60,14 +60,19 @@
 
 <h3 id="coreFeatures">核心亮點與功能</h3>
 
-StockBucks 為一款多功能的股市模擬交易系統，
+對於其他也是模擬盤的具有以下優勢:
+* 打破時間限制：解決⽬前模擬系統僅限於「即時盤」(9:00~13:30)的問題。讓學⽣與上班族能隨時練習，不再錯過實戰經驗。
+* 降低入場門檻：將複雜的系統簡化成部分功能，藉由基礎功能學會市場邏輯。
+* 實戰化的模擬起點：無論零股或整張，讓使⽤者學習分散投資與⾵險控管。每⼀筆交易都計算⼿續費與稅⾦，真實還原市場交易成本。
+* 暢遊現實或虛擬數據：使⽤或現實或虛擬的數據來顯⽰數據
 
-Here's why:
-* Your time should be focused on creating something amazing. A project that solves a problem and helps others
-* You shouldn't be doing the same tasks over and over like creating a README from scratch
-* You should implement DRY principles to the rest of your life :smile:
+「投資最好的時間是十年前，其次是現在。」 - Dambisa Moyo
 
-Of course, no one template will serve all projects since your needs may be different. So I'll be adding more in the near future. You may also suggest changes by forking this repo and creating a pull request or opening an issue. Thanks to all the people who have contributed to expanding this template!
+雖然我們無法回到十年前，但是我們可以對於「過去」隨時進行模擬！
+
+同時體驗時間複利的威力、建立進出場限制與紀律
+
+
 
 Use the `BLANK_README.md` to get started.
 
@@ -327,7 +332,7 @@ Use the `BLANK_README.md` to get started.
 
 <h2 id="Team">開發人員</h2>
 
-以下為專案共同開發人員(按照姓氏筆劃數)：
+以下為專案共同開發人員(按照字典序)：
 
 |<a href="https://github.com/Ryder1207" target="_blank"><img src="images/ryder1207.png" alt="ryder1207" height="60px"></a>|<a href="https://github.com/SACJYhpt" target="_blank"><img src="images/sacjyhpt.png" alt="SACJYhpt" height="60px"></a>|<a href="https://github.com/wwubae" target="_blank"><img src="images/wwubae.png" alt="wwubae" height="60px"></a>|
 |:-:|:-:|:-:|
