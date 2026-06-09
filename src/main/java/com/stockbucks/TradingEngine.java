@@ -12,7 +12,8 @@ public class TradingEngine {
     private HashMap <String, Integer> todayOddsShares = new HashMap<>();
     // 維護尚未成交的委託單 等待撮合
     private List <Order> pendingOrders = new ArrayList<>();
-    private List <Order> allOrders = new ArrayList<>();
+    private List <Order> allOrders = new ArrayList<>();      // 當日
+    private List <Order> historyOrders = new ArrayList<>();  // 歷史
 
     private List <String> notificationQueue = new ArrayList<>();
 
@@ -23,6 +24,48 @@ public class TradingEngine {
         this.globalCalender = globalCalender;
     }
 
+    public void marketCloseCleanup() {
+        int invalidCnt = 0;
+        for (Order oldOrder : pendingOrders) {
+            if (oldOrder.getStatus() == Order.OrderStatus.PENDING) {
+                oldOrder.setStatus(Order.OrderStatus.INVALID);
+                if (oldOrder.getUser().getOrderHistory() != null) {
+                    oldOrder.getUser().getOrderHistory().add(oldOrder);
+                }
+                invalidCnt++;
+            }
+        }
+        if (invalidCnt > 0) {
+            notificationQueue.add(String.format("📅 收盤通知：今日未成交的 %d 筆委託已自動失效 (INVALID)。", invalidCnt));
+        }
+
+        pendingOrders.clear();
+    }
+
+    public void checkAndHandleCrossDay(String date, User user) {
+        if (date == null || date.trim().isEmpty()) return;
+        date = date.contains(" ") ? date.split(" ")[0] : date;
+
+        if (currentDate.isEmpty()) {
+            currentDate = date;
+            user.getSettlementManager().SettlementClearing(date, user);
+            return;
+        }
+
+        if (date.compareTo(currentDate) > 0) {
+            currentDate = date;
+            todayOddsShares.clear();
+
+            user.getSettlementManager().SettlementClearing(date, user);
+
+            for (Order order : allOrders) {
+                historyOrders.add(order);
+            }
+
+            allOrders.clear();
+        }
+    }
+
     // isBuy: 0: sell, 1: buy
     public void trading(User user, String stockID, String date, int currentMinute, int shares, double price, boolean isBuy) {
         if (date == null || date.trim().isEmpty()) {
@@ -31,23 +74,10 @@ public class TradingEngine {
         }
 
         date = date.contains(" ") ? date.split(" ")[0] : date;
-        // 日期切換與交割清算
-        if (currentDate.isEmpty()) {
-            currentDate = date;
-            user.getSettlementManager().SettlementClearing(date, user);
-        }
-        if (date.compareTo(currentDate) > 0) {
-            currentDate = date;
-            todayOddsShares.clear();
-            user.getSettlementManager().SettlementClearing(date, user);
-            for (Order oldOrder: pendingOrders) {
-                oldOrder.setStatus(Order.OrderStatus.INVALID);
-                oldOrder.getUser().getOrderHistory().add(oldOrder);
-            }
-            pendingOrders.clear();
-            allOrders.clear();
-        }
-        else if (date.compareTo(currentDate) < 0) {
+
+        checkAndHandleCrossDay(date, user);
+
+        if (date.compareTo(currentDate) < 0) {
             System.out.println("引擎時間: " + currentDate + "，傳入時間: " + date);
             return; // 錯誤 不予委託
         }
@@ -73,6 +103,7 @@ public class TradingEngine {
                 System.out.println("【委託】委託失敗，持有庫存不足");
                 order.setStatus(Order.OrderStatus.FAILED);
                 pendingOrders.add(order);
+                allOrders.add(order);
                 return;
             }
             else if (shares > totalHoldings - todayOdds) {
@@ -80,6 +111,7 @@ public class TradingEngine {
                 System.out.println("【委託】委託失敗，零股無法當沖");
                 order.setStatus(Order.OrderStatus.FAILED);
                 pendingOrders.add(order);
+                allOrders.add(order);
                 return;
             }
         }
@@ -175,7 +207,7 @@ public class TradingEngine {
                 notificationQueue.add("【交易】交易失敗，持有庫存不足");
                 System.out.println("【交易】交易失敗，持有庫存不足");
                 order.setStatus(Order.OrderStatus.FAILED);
-                pendingOrders.add(order);
+                order.setStatus(Order.OrderStatus.FAILED);
                 return;
             }
 
@@ -204,6 +236,10 @@ public class TradingEngine {
 
     public List <Order> getAllOrders() {
         return this.allOrders;
+    }
+
+    public List <Order> getHistoryOrders() {
+        return this.historyOrders;
     }
 
     public String getReturnMsg() {

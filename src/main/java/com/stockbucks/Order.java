@@ -84,4 +84,30 @@ public class Order {
     public boolean isBuy() {
         return isBuy;
     }
+
+    public long getCommission() { // 取得手續費 (只有成交 FILLED 時才產生費用，其餘為 0)
+        if (this.status != OrderStatus.FILLED) return 0;
+        double totalCost = this.shares * this.limitPrice; // 註：這裡若撮合有改用 matchPrice 亦可調整
+        return (long) Math.max(1, Math.floor(totalCost * 0.001425));
+    }
+
+    public long getTax() { // 取得證交稅 (只有賣出且成交 FILLED 時才扣證交稅)
+        if (this.status != OrderStatus.FILLED || this.isBuy()) return 0;
+        double totalCost = this.shares * this.limitPrice;
+        return (long) Math.floor(totalCost * 0.003);
+    }
+
+    public double getTotalSettlementAmount() { // 取得交割總金額 (買入扣款變負數，賣出入帳變正數，未成交為 0)
+        if (this.status != OrderStatus.FILLED) return 0.0;
+        double totalCost = this.shares * this.limitPrice;
+        long commission = getCommission();
+
+        if (this.isBuy()) { // 買入：扣款總額 = 本金 + 手續費 (以負數呈現代表流出)
+            return -(totalCost + commission);
+        }
+        else { // 賣出：入帳總額 = 本金 - 手續費 - 證交稅 (正數代表流入) 
+            long tax = getTax();
+            return totalCost - (commission + tax);
+        }
+    }
 }

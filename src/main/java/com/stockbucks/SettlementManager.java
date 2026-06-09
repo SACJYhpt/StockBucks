@@ -18,6 +18,13 @@ public class SettlementManager implements Serializable {
             this.date = date;
             this.price = price;
         }
+        public String getDate() {
+            return date;
+        }
+
+        public double getPrice() {
+            return price;
+        }
     }
 
     public void addSettlement(String date, double price) {
@@ -34,5 +41,9 @@ public class SettlementManager implements Serializable {
                 iterator.remove();
             }
         }
+    }
+
+    public Queue<Settlement> getSettlementQueue() {
+        return this.q;
     }
 }

@@ -26,7 +26,9 @@ import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Text;
+
 import javafx.stage.Stage;
+import javafx.stage.FileChooser;
 import javafx.stage.Screen;
 import javafx.stage.StageStyle;
 
@@ -44,7 +46,9 @@ import java.io.ObjectOutputStream;
 import java.text.NumberFormat;
 
 import javafx.util.Duration;
+import java.util.LinkedHashMap;
 import java.util.ArrayList;
+import java.util.Queue;
 import java.util.List;
 
 public class MainApp extends Application {
@@ -71,11 +75,17 @@ public class MainApp extends Application {
     private XYChart.Series<Number, Number> limitUpSeries;
     private XYChart.Series<Number, Number> limitDownSeries;
     private XYChart.Series<Number, Number> yesterdayCloseSeries;
+    private XYChart.Series<Number, Number> currentPriceSeries = new XYChart.Series<>();
+    private Label rightPriceTag;
 
     private HBox backtestControlBar;  // 包含時空選擇與速控的容器
     private DatePicker dateSelector;  // 月曆時空選擇器
     private Slider speedSlider;       // 速度控制條
     private Label speedLabel;       // 用於顯示當前模擬速度的標籤
+    private final double[] SPEED_STEPS = {  // 速度級距，預設是 9 (1)
+        0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9,
+        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0
+    };
     
     // 模擬核心數據
     private int tickCount = 0;
@@ -109,6 +119,16 @@ public class MainApp extends Application {
     private TabPane marketTabPane = new TabPane();
     private TextField marketSearchField = new TextField();
     private TextField stockSearchField;
+
+    // 用於「銀行餘額與交割排程」
+    private Label lblAvailableCashValue;
+    private TableView<SettlementManager.Settlement> settlementScheduleTable; 
+private javafx.collections.ObservableList<SettlementManager.Settlement> observableSettlements = javafx.collections.FXCollections.observableArrayList();
+
+    // 用於「歷史委託清單與匯出」
+    private Label lblHistoryCount;
+    private TableView<Order> historyOrderTable;
+    private javafx.collections.ObservableList<Order> observableHistoryOrders = javafx.collections.FXCollections.observableArrayList();
 
     // 定義選單 Enum
     private enum MenuType {
@@ -590,8 +610,8 @@ public class MainApp extends Application {
         sellBtn.setOnAction(e -> handleTrade(false));
 
         tradeControlPanel.getChildren().addAll(
-            new Label("目標價格"), priceTickBox, 
-            new Label("交易股數:"), sharesTickBox, 
+            new Label("價格: "), priceTickBox, 
+            new Label("股數: "), sharesTickBox, 
             buyBtn, sellBtn, 
             new Separator(javafx.geometry.Orientation.VERTICAL), 
             infoLabel
@@ -673,7 +693,7 @@ public class MainApp extends Application {
 
                     final boolean finalDateFound = dateFound;
                     final int finalIndex = foundIndex;
-                    final java.util.List<com.stockbucks.StockData> finalParsedHistory = parsedHistory;
+                    final List <com.stockbucks.StockData> finalParsedHistory = parsedHistory;
 
                     Platform.runLater(() -> {
                         // 所有共享狀態的寫入統一在 UI 執行緒進行，杜絕 Race Condition
@@ -708,15 +728,33 @@ public class MainApp extends Application {
 
         //速度控制條
         Label lblSpeed = new Label("⚡ 模擬速度:");
-        speedSlider = new Slider(1, 10, 1); // 1x ~ 10x
+
+        speedSlider = new Slider(0, SPEED_STEPS.length - 1, 9); // 預設為 1x
+        speedSlider.setPrefWidth(150);
+
         speedSlider.setShowTickMarks(true);
         speedSlider.setMajorTickUnit(3);
-        speedLabel = new Label("1x (一般)");
+
+        speedLabel = new Label("1.0x (一般)");
+        speedLabel.setStyle("-fx-text-fill: #adbac7; -fx-font-weight: bold; -fx-min-width: 70;");
         
         speedSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
-            int speed = newVal.intValue();
-            speedLabel.setText(speed + "x");
-            updateTimelineSpeed(speed);
+            int index = newVal.intValue(); // 整數索引
+            if (index >= 0 && index < SPEED_STEPS.length) {
+                double currentSpeed = SPEED_STEPS[index];
+
+                if (currentSpeed == 1.0) {
+                    speedLabel.setText("1.0x (一般)");
+                }
+                else if (currentSpeed < 1.0) {
+                    speedLabel.setText(String.format("%.1fx (慢速)", currentSpeed));
+                }
+                else {
+                    speedLabel.setText(String.format("%.0fx (快速)", currentSpeed));
+                }
+
+                updateTimelineSpeed(newVal.doubleValue());
+            }
         });
 
         backtestControlBar.getChildren().addAll(lblDate, dateSelector, new Separator(javafx.geometry.Orientation.VERTICAL), lblSpeed, speedSlider, speedLabel);
@@ -904,9 +942,14 @@ public class MainApp extends Application {
         orderListView.getChildren().add(orderTabPane);
     }
 
-    private void updateTimelineSpeed(int speedMultiplier) {
-        if (timeline == null) return;
-        timeline.setRate(speedMultiplier);
+    private void updateTimelineSpeed(double sliderValue) {
+        if (timeline == null || SPEED_STEPS == null) return;
+        
+        int index = (int) sliderValue;
+        if (index >= 0 && index < SPEED_STEPS.length) {
+            double realSpeed = SPEED_STEPS[index];
+            timeline.setRate(realSpeed);
+        }
     }
 
     private void refreshActiveOrderVisibility() {
@@ -1080,6 +1123,8 @@ public class MainApp extends Application {
             case ORDERS:
                 contentArea.getChildren().add(orderListView);
                 break;
+            case EXIT:
+                break;
         }
     }
 
@@ -1111,7 +1156,7 @@ public class MainApp extends Application {
         File dir = new File("saves");
         if (!dir.exists()) dir.mkdir();
         try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(new File(dir, fileName + ".dat")))) {
-            java.util.LinkedHashMap<String, ArrayList<String>> saveWatchlist = new java.util.LinkedHashMap<>();
+            LinkedHashMap <String, ArrayList<String>> saveWatchlist = new java.util.LinkedHashMap<>();
             for (String key : watchlistData.keySet()) {
                 saveWatchlist.put(key, new ArrayList<>(watchlistData.get(key)));
             }
@@ -1146,13 +1191,27 @@ public class MainApp extends Application {
 
         yesterdayCloseSeries = new XYChart.Series<>();
         yesterdayCloseSeries.setName("昨收價");
+
+        currentPriceSeries = new XYChart.Series<>();
+        currentPriceSeries.setName("現價");
         
         priceSeries = new XYChart.Series<>();
         priceSeries.setName("股價");
 
+        rightPriceTag = new Label();
+        rightPriceTag.setStyle(
+            "-fx-background-color: #388bfd;" + // 藍色背景（配合你的虛線顏色）
+            "-fx-text-fill: white;" +          // 白色文字
+            "-fx-padding: 2 5 2 5;" +          // 內距
+            "-fx-font-size: 11px;" + 
+            "-fx-background-radius: 3px;"      // 圓角
+        );
+        rightPriceTag.setManaged(false);
+
         chart.getData().add(limitUpSeries);
         chart.getData().add(limitDownSeries);
         chart.getData().add(yesterdayCloseSeries);
+        chart.getData().add(currentPriceSeries);
         chart.getData().add(priceSeries);
 
         limitUpSeries.getNode().setStyle("-fx-stroke: #FF3B30; -fx-stroke-dash-array: 5 5; -fx-stroke-width: 1.5px;");
@@ -1230,16 +1289,17 @@ public class MainApp extends Application {
             // 7. 重新載入未成交/委託中的單據表格
             if (activeOrderTable != null) {
                 observableOrders.clear();
-                //配合tradingEngine 實際的未成交單方法 (getPendingOrders)
-                java.util.List<?> pending = tradingEngine.getPendingOrders();
-                if (pending != null) {
-                    for (int i = pending.size() - 1; i >= 0; i--) {
-                        // 確保轉型安全
-                        if (pending.get(i) instanceof com.stockbucks.Order) {
-                            observableOrders.add((com.stockbucks.Order) pending.get(i));
+
+                // 保持同步：下單成功後也一樣抓取全部單據
+                List <?> allOrders = tradingEngine.getAllOrders();
+                if (allOrders != null) {
+                    for (int i = allOrders.size() - 1; i >= 0; i--) {
+                        if (allOrders.get(i) instanceof com.stockbucks.Order) {
+                            observableOrders.add((com.stockbucks.Order) allOrders.get(i));
                         }
                     }
                 }
+                refreshActiveOrderVisibility();
             }
             
             //sharesField.clear();
@@ -1453,6 +1513,19 @@ public class MainApp extends Application {
         // 如果定時器正在跑，先無條件關閉它，防止多個執行緒重疊衝突
         if (timeline != null) timeline.stop();
 
+        if (historyData != null && dayIndex < historyData.size()) {
+            String nextDateStr = historyData.get(dayIndex).getDate();
+            tradingEngine.checkAndHandleCrossDay(nextDateStr, user);
+
+            refreshHistoryAndSettlementUI();
+            
+            // 順便把開盤的 T+2 交割通知倒出來
+            String openMsg;
+            while ((openMsg = tradingEngine.getReturnMsg()) != null) {
+                showNotification(openMsg, "INFO");
+            }
+        }
+
         // ====================================================================
         // 🟢 【分流 A】真實即時模式：只抓最新的一筆靜態資料，不跑計時器模擬
         // ====================================================================
@@ -1484,6 +1557,7 @@ public class MainApp extends Application {
                             if (limitUpSeries != null) limitUpSeries.getData().clear();
                             if (limitDownSeries != null) limitDownSeries.getData().clear();
                             if (yesterdayCloseSeries != null) yesterdayCloseSeries.getData().clear();
+                            if (currentPriceSeries != null) currentPriceSeries.getData().clear();
                             refreshAssetView();
                             updateInfoLabel();
                         });
@@ -1543,7 +1617,6 @@ public class MainApp extends Application {
     }
 
     /** 抽出的純模擬啟動邏輯，只在 historyData 已確認就緒後呼叫 */
-    @SuppressWarnings("unchecked")
     private void startHistorySimulation() {
         if (historyData == null || historyData.isEmpty() || dayIndex >= historyData.size()) {
             showWarning("暫無可用的回測歷史數據！");
@@ -1594,7 +1667,7 @@ public class MainApp extends Application {
 
         if (timeline != null) timeline.stop();
 
-        timeline = new Timeline(new KeyFrame(Duration.millis(300), e -> {
+        timeline = new Timeline(new KeyFrame(Duration.millis(600), e -> {
             currentPrice = simulator.getNextPrice();
             if (currentPrice != -1) {
                 int currentTime = tickCount;
@@ -1602,7 +1675,8 @@ public class MainApp extends Application {
                 String currentTimeStr = String.format("%02d:%02d", currentTime / 60, currentTime % 60);
 
                 String simDate = historyData.get(dayIndex).getDate().replace("/", "-");
-                currentPriceLabel.setText("當前市價: " + String.format("%.2f(%s)", currentPrice, currentTimeStr));
+                currentPriceLabel.setText(String.format("日期: %s | 時間: %s | 即時市價: %.2f", simDate, currentTimeStr, currentPrice));
+                currentPriceLabel.setStyle("-fx-font-size: 27px; -fx-font-weight: bold;");
                 priceSeries.getData().add(new XYChart.Data<>(tickCount, currentPrice));
                 if (priceSeries.getNode() != null) {
                     if (currentPrice > yesterdayClose * 1.005) {
@@ -1611,6 +1685,24 @@ public class MainApp extends Application {
                         priceSeries.getNode().setStyle("-fx-stroke: #34C759; -fx-stroke-width: 2px;");
                     } else {
                         priceSeries.getNode().setStyle("-fx-stroke: #8E8E93; -fx-stroke-width: 2px;");
+                    }
+                }
+
+                if (currentPriceSeries != null) {
+                    // 1. 先清空上一個 tick 的現價線
+                    currentPriceSeries.getData().clear();
+                    currentPriceSeries.getData().add(new XYChart.Data<>(0, currentPrice));
+                    XYChart.Data<Number, Number> endPoint = new XYChart.Data<>(270, currentPrice);
+
+                    Label priceLabel = new Label(String.format("%.2f", currentPrice));
+                    priceLabel.setStyle("-fx-text-fill: #388bfd; -fx-font-weight: bold; -fx-background-color: rgba(255,255,255,0.8); -fx-padding: 2;");
+
+                    endPoint.setNode(priceLabel);
+
+                    currentPriceSeries.getData().add(endPoint);
+
+                    if (currentPriceSeries.getNode() != null) {
+                        currentPriceSeries.getNode().setStyle("-fx-stroke: #388bfd; -fx-stroke-dash-array: 4 4; -fx-stroke-width: 2px;");
                     }
                 }
 
@@ -1633,19 +1725,13 @@ public class MainApp extends Application {
 
                     List <Order> uiOrderList = tradingEngine.getAllOrders();
 
-                    for (int i = uiOrderList.size() - 1; i >= 0; i--) {
-                        observableOrders.add(uiOrderList.get(i));
+                    if (uiOrderList != null) {
+                        for (int i = uiOrderList.size() - 1; i >= 0; i--) {
+                            observableOrders.add(uiOrderList.get(i));
+                        }
                     }
-                    
-                    activeOrderLayout.getChildren().clear();
 
-                    if (observableOrders.isEmpty()) {
-                        activeOrderLayout.getChildren().add(emptyPlaceholder);
-                    }
-                    else {
-                        VBox.setVgrow(activeOrderTable, Priority.ALWAYS);
-                        activeOrderLayout.getChildren().add(activeOrderTable);
-                    }
+                    refreshActiveOrderVisibility();
                 }
 
                 updateInfoLabel();
@@ -1663,19 +1749,47 @@ public class MainApp extends Application {
                 }
             }
             else {
-                timeline.stop();
+                // 當天數據跑完了，先把 Timeline 停下來
+                timeline.stop(); 
+
+                // 收盤結算，把 PENDING 改為 INVALID，但「保留當日紀錄」給表格顯示！
+                tradingEngine.marketCloseCleanup();
+
+                // 重新整理表格！此時玩家會親眼看到表格內沒成交的單子，狀態欄啪一聲全部變成 INVALID！
+                if (activeOrderTable != null) {
+                    observableOrders.clear();
+                    List<Order> uiOrderList = tradingEngine.getAllOrders(); // 裡面依然有今天的所有單子
+                    if (uiOrderList != null) {
+                        for (int i = uiOrderList.size() - 1; i >= 0; i--) {
+                            observableOrders.add(uiOrderList.get(i));
+                        }
+                    }
+                    refreshActiveOrderVisibility(); // 繼續讓表格亮著，不會消失
+                }
+
+                // 倒出收盤通知訊息
+                String closeMsg;
+                while ((closeMsg = tradingEngine.getReturnMsg()) != null) {
+                    showNotification(closeMsg, "INFO");
+                }
+
+                // 更新資產數據
+                refreshAssetView();
+                updateInfoLabel();
+
+                // 進度推進：指針準備移到下一天，tick 歸零
                 dayIndex++;
                 tickCount = 0;
-                // 自動進入次日：若仍有歷史資料則無縫啟動下一天的模擬
-                if (historyData != null && dayIndex < historyData.size()) {
-                    Platform.runLater(() -> handleStartSimulation());
-                }
+
+                refreshHistoryAndSettlementUI();
+
+                // 每日結束後停一下，等待玩家點擊「開始」
+                showNotification("📅 今日交易已結束！未成交單已轉為 INVALID。請檢查對帳單，並再次點擊「開始」正式開盤下一天", "INFO");
             }
         }));
         timeline.setCycleCount(Animation.INDEFINITE);
         if (speedSlider != null) {
-            int currentSpeed = (int) speedSlider.getValue();
-            timeline.setRate(currentSpeed);
+            updateTimelineSpeed(speedSlider.getValue());
         }
         timeline.play();
     }
@@ -2015,6 +2129,7 @@ public class MainApp extends Application {
     /**
      * ✨ 動態對接 User 數據，渲染仿國泰/富邦風格的圓餅圖資產面板
      */
+     @SuppressWarnings("unchecked")
     private void refreshAssetView() {
         if (assetView == null || user == null) return;
 
@@ -2077,9 +2192,9 @@ public class MainApp extends Application {
         double totalStockValue = 0.0;
         // 總原始購買成本
         double totalStockCost = 0.0;
-        java.util.HashMap<String, StockHoldings> holdings = user.getHolding();
+        LinkedHashMap <String, StockHoldings> holdings = user.getHolding();
 
-        java.util.List<javafx.scene.chart.PieChart.Data> validPieData = new java.util.ArrayList<>();
+        List <javafx.scene.chart.PieChart.Data> validPieData = new java.util.ArrayList<>();
         VBox legendList = new VBox(12);
         legendList.setAlignment(Pos.CENTER_LEFT);
 
@@ -2235,9 +2350,317 @@ public class MainApp extends Application {
         realizedContent.getChildren().add(realizedPanel);
         realizedTab.setContent(realizedContent);
 
-        // 最後將兩個分頁加入資產總覽主畫面
-        assetTabPane.getTabs().addAll(unrealizedTab, realizedTab);
+        // 第三分頁：銀行餘額與預計交割排程
+        Tab bankTab = new Tab("🏦 銀行與交割排程");
+        VBox bankContent = new VBox(15);
+        bankContent.setPadding(new Insets(15, 10, 10, 10));
+        bankContent.setStyle("-fx-background-color: #22272e;");
+
+        VBox cashPanel = new VBox(8);
+        cashPanel.setPadding(new Insets(15));
+        cashPanel.setStyle("-fx-background-color: #1c2128; -fx-background-radius: 8; -fx-border-color: #30363d;");
+
+        Label lblCashTitle = new Label("目前銀行可用餘額 (可下單本金上限)");
+        lblCashTitle.setStyle("-fx-text-fill: #8b949e; -fx-font-size: 13px;");
+        
+        lblAvailableCashValue = new Label(String.format("$ %,.2f", user.getCash()));
+        lblAvailableCashValue.setStyle("-fx-font-size: 24px; -fx-font-weight: bold; -fx-text-fill: #2da44e;");
+        cashPanel.getChildren().addAll(lblCashTitle, lblAvailableCashValue);
+
+        // 下方：T+2 未來交割排程表
+        Label lblTableTitle = new Label("📅 未來 T+1 / T+2 應交割款項排程清單");
+        lblTableTitle.setStyle("-fx-text-fill: #adbac7; -fx-font-weight: bold; -fx-font-size: 14px;");
+
+        settlementScheduleTable = new TableView<>();
+        settlementScheduleTable.setPlaceholder(new Label("💤 目前無待交割之款項"));
+        VBox.setVgrow(settlementScheduleTable, Priority.ALWAYS);
+
+        // 欄位 1：應交割日期
+        TableColumn<SettlementManager.Settlement, String> dateCol = new TableColumn<>("應交割日期");
+        dateCol.setCellValueFactory(new PropertyValueFactory<>("date"));
+        TableColumn<SettlementManager.Settlement, Double> amtCol = new TableColumn<>("預計扣/入帳金額 (TWD)");
+        amtCol.setCellValueFactory(new PropertyValueFactory<>("price"));
+        amtCol.setPrefWidth(220);
+        
+        // 根據金額正負上色 (紅/綠)
+        amtCol.setCellFactory(column -> new TableCell<>() {
+            @Override
+            protected void updateItem(Double item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null || item == 0.0) {
+                    setText("-");
+                    setStyle("-fx-text-fill: #8E8E93; -fx-alignment: CENTER-RIGHT;");
+                }
+                else {
+                    if (item > 0) {
+                        setText(String.format("+$ %,.2f", item));
+                        setStyle("-fx-text-fill: #FF3B30; -fx-font-weight: bold; -fx-alignment: CENTER-RIGHT;"); 
+                    }
+                    else {
+                        setText(String.format("-$ %,.2f", Math.abs(item)));
+                        setStyle("-fx-text-fill: #34C759; -fx-font-weight: bold; -fx-alignment: CENTER-RIGHT;"); 
+                    }
+                }
+            }
+        });
+
+        settlementScheduleTable.getColumns().addAll(dateCol, amtCol);
+        settlementScheduleTable.setItems(observableSettlements);
+
+        bankContent.getChildren().addAll(cashPanel, lblTableTitle, settlementScheduleTable);
+        bankTab.setContent(bankContent);
+
+        // 第四分頁：歷史委託清單
+        Tab historyTab = new Tab("📜 歷史對帳明細");
+        VBox historyContent = new VBox(12);
+        historyContent.setPadding(new Insets(15, 10, 10, 10));
+        historyContent.setStyle("-fx-background-color: #22272e;");
+
+        // 頂部多功能工具列
+        HBox toolBar = new HBox(15);
+        toolBar.setAlignment(Pos.CENTER_LEFT);
+        toolBar.setPadding(new Insets(8));
+        toolBar.setStyle("-fx-background-color: #2d333b; -fx-background-radius: 6;");
+
+        // 顯示現有筆數 Label
+        lblHistoryCount = new Label("現有紀錄: 0 / 100 筆");
+        lblHistoryCount.setStyle("-fx-text-fill: #adbac7; -fx-font-weight: bold;");
+
+        // 選擇匯出後的清理模式
+        ComboBox<String> actionCombo = new ComboBox<>();
+        actionCombo.getItems().addAll("僅匯出檔案", "匯出並清空歷史");
+        actionCombo.setValue("僅匯出檔案");
+        actionCombo.setStyle("-fx-background-color: #343942; -fx-text-fill: white;");
+
+        // 選擇匯出格式 (支援 TXT / PDF)
+        ComboBox<String> formatCombo = new ComboBox<>();
+        formatCombo.getItems().addAll("匯出為明細 TXT", "匯出為專業 PDF");
+        formatCombo.setValue("匯出為明細 TXT");
+        formatCombo.setStyle("-fx-background-color: #343942; -fx-text-fill: white;");
+
+        // 執行按鈕
+        Button btnExport = new Button("💾 執行匯出");
+        btnExport.setStyle("-fx-background-color: #2da44e; -fx-text-fill: white; -fx-font-weight: bold;");
+
+        toolBar.getChildren().addAll(lblHistoryCount, new Separator(javafx.geometry.Orientation.VERTICAL), actionCombo, formatCombo, btnExport);
+
+        // 歷史委託表格
+        historyOrderTable = new TableView<>();
+        historyOrderTable.setPlaceholder(new Label("💤 尚無跨日歷史對帳紀錄"));
+        VBox.setVgrow(historyOrderTable, Priority.ALWAYS);
+
+        // 關鍵：宣告欄位，並直接對接 Order 內部的變數名稱！
+        TableColumn<Order, String> HisDateCol = new TableColumn<>("委託日期");
+        HisDateCol.setCellValueFactory(new PropertyValueFactory<>("date"));
+        TableColumn<Order, String> HisTimeCol = new TableColumn<>("時間");
+        HisTimeCol.setCellValueFactory(new PropertyValueFactory<>("time"));
+        TableColumn<Order, String> HisStockIDCol = new TableColumn<>("股票代號");
+        HisStockIDCol.setCellValueFactory(new PropertyValueFactory<>("stockID"));
+        TableColumn<Order, Boolean> HisTypeCol = new TableColumn<>("類型");
+        HisTypeCol.setCellValueFactory(new PropertyValueFactory<>("buy"));
+        HisTypeCol.setCellFactory(column -> new TableCell<Order, Boolean>() {
+            @Override
+            protected void updateItem(Boolean isBuy, boolean empty) {
+                super.updateItem(isBuy, empty);
+                if (empty || isBuy == null) {
+                    setText(null);
+                    setStyle("");
+                }
+                else {
+                    if (isBuy) {
+                        setText("買入");
+                        setStyle("-fx-text-fill: #FF3B30; -fx-font-weight: bold;");
+                    }
+                    else {
+                        setText("賣出");
+                        setStyle("-fx-text-fill: #34C759; -fx-font-weight: bold;");
+                    }
+                }
+            }
+        });
+        TableColumn<Order, Double> HisPriceCol = new TableColumn<>("委託價");
+        HisPriceCol.setCellValueFactory(new PropertyValueFactory<>("limitPrice"));
+        TableColumn<Order, Integer> HisSharesCol = new TableColumn<>("委託數");
+        HisSharesCol.setCellValueFactory(new PropertyValueFactory<>("shares"));
+        TableColumn<Order, Order.OrderStatus> HisStatusCol = new TableColumn<>("狀態");
+        HisStatusCol.setCellValueFactory(new PropertyValueFactory<>("status"));
+        HisStatusCol.setCellFactory(column -> new TableCell<Order, Order.OrderStatus>() {
+            @Override
+            protected void updateItem(Order.OrderStatus status, boolean empty) {
+                super.updateItem(status, empty);
+                if (empty || status == null) {
+                    setText(null);
+                    setStyle("");
+                }
+                else {
+                    setText(status.toString());
+                    if (status == Order.OrderStatus.FILLED) {
+                        setStyle("-fx-text-fill: #007AFF; -fx-font-weight: bold;");
+                    }
+                    else if (status == Order.OrderStatus.PENDING) {
+                        setStyle("-fx-text-fill: #FF9500; -fx-font-weight: bold;");
+                    }
+                    else if (status == Order.OrderStatus.FAILED) {
+                        setStyle("-fx-text-fill: #ff0d00; -fx-font-weight: bold;");
+                    }
+                    else {
+                        setStyle("-fx-text-fill: #8E8E93;");
+                    }
+                }
+            }
+        });
+        TableColumn<Order, Long> HisCommissionCol = new TableColumn<>("手續費");
+        HisCommissionCol.setCellValueFactory(new PropertyValueFactory<>("commission")); // 對應 getCommission()
+        HisCommissionCol.setCellFactory(column -> new TableCell<Order, Long>() {
+            @Override
+            protected void updateItem(Long price, boolean empty) {
+                super.updateItem(price, empty);
+                if (empty || price == null) {
+                    setText(null);
+                    setGraphic(null);
+                    setStyle("");
+                }
+                else {
+                    setText(String.format("$ %,d", price));
+                    setStyle("-fx-text-fill: #8E8E93; -fx-alignment: CENTER-RIGHT;");
+                }
+            }
+        });
+        TableColumn<Order, Long> HisTaxCol = new TableColumn<>("證交稅");
+        HisTaxCol.setCellValueFactory(new PropertyValueFactory<>("tax")); // 對應 getTax()
+        HisTaxCol.setCellFactory(column -> new TableCell<Order, Long>() {
+            @Override
+            protected void updateItem(Long price, boolean empty) {
+                super.updateItem(price, empty);
+                if (empty || price == null) {
+                    setText(null);
+                    setGraphic(null);
+                    setStyle("");
+                }
+                else {
+                    setText(String.format("$ %,d", price));
+                    setStyle("-fx-text-fill: #adbac7;");
+                }
+            }
+        });
+        TableColumn<Order, Double> HisTotalAmtCol = new TableColumn<>("交割淨額");
+        HisTotalAmtCol.setCellValueFactory(new PropertyValueFactory<>("totalSettlementAmount")); // 對應 getTotalSettlementAmount()
+        HisTotalAmtCol.setCellFactory(column -> new TableCell<Order, Double>() {
+            @Override
+            protected void updateItem(Double amount, boolean empty) {
+                super.updateItem(amount, empty);
+                if (empty || amount == null) {
+                    setText(null);
+                    setGraphic(null);
+                    setStyle("");
+                }
+                else {
+                    if (amount > 0) {
+                        setText(String.format("+$ %,.2f", amount));
+                        setStyle("-fx-text-fill: #FF3B30; -fx-font-weight: bold; -fx-alignment: CENTER-RIGHT;");
+                    }
+                    else {
+                        setText(String.format("-$ %,.2f", Math.abs(amount)));
+                        setStyle("-fx-text-fill: #34C759; -fx-font-weight: bold; -fx-alignment: CENTER-RIGHT;");
+                    }
+                }
+            }
+        });
+
+        // 把精簡好的欄位加進去
+        historyOrderTable.getColumns().addAll(HisDateCol, HisTimeCol, HisStockIDCol, HisTypeCol, HisPriceCol, HisSharesCol, HisStatusCol, HisCommissionCol, HisTaxCol, HisTotalAmtCol);
+        historyOrderTable.setItems(observableHistoryOrders);
+
+        historyContent.getChildren().addAll(toolBar, historyOrderTable);
+        historyTab.setContent(historyContent);
+
+        final int[] fileSequence = {1}; 
+
+        btnExport.setOnAction(e -> {
+            FileChooser fileChooser = new FileChooser();
+            fileChooser.setTitle("儲存您的 StockBucks 交易對帳單");
+
+            // 🎯 自動生成預設流水號檔名：mytradehistory_1, mytradehistory_2 ...
+            String defaultName = "myTradeHistory" + fileSequence[0];
+            fileChooser.setInitialFileName(defaultName);
+
+            if (formatCombo.getValue().contains("TXT")) {
+                fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("文字明細檔 (*.txt)", "*.txt"));
+            } else {
+                fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("可攜式文件 PDF (*.pdf)", "*.pdf"));
+            }
+
+            File targetFile = fileChooser.showSaveDialog(historyTab.getTabPane().getScene().getWindow());
+            if (targetFile != null) {
+                // 呼叫背後的匯出實作
+                if (formatCombo.getValue().contains("TXT")) {
+                    exportListToTxt(targetFile, tradingEngine.getHistoryOrders());
+                } else {
+                    exportListToPdf(targetFile, tradingEngine.getHistoryOrders());
+                }
+
+                showNotification("💾 成功匯出至：" + targetFile.getName(), "INFO");
+                fileSequence[0]++; // 流水號自動加 1，下次打開就會是 _2
+
+                // 如果選了「匯出並清空」
+                if (actionCombo.getValue().contains("清空")) {
+                    tradingEngine.getHistoryOrders().clear();
+                    refreshHistoryAndSettlementUI(); // 重新刷空 UI
+                }
+            }
+        });
+
+        // 最後將分頁加入資產總覽主畫面
+        assetTabPane.getTabs().addAll(unrealizedTab, realizedTab, bankTab, historyTab);
         assetView.getChildren().add(assetTabPane);
+    }
+
+    private void exportListToTxt(File file, List <Order> orders) {
+        try (java.io.FileWriter fw = new java.io.FileWriter(file);
+            java.io.PrintWriter pw = new java.io.PrintWriter(fw)) {
+            pw.println("=========================================================================");
+            pw.println("                StockBucks 擬真股票交易系統 - 歷史對帳單明細               ");
+            pw.println("=========================================================================");
+            for (Order o : orders) {
+                pw.printf("日期: %s | 股票: %s | 動作: %s | 限價: %.2f | 股數: %d | 狀態: %s| 手續費: %.2f | 證交稅: %.2f | 交割金額: %s\n",
+                        o.getDate(), o.getStockID(), o.isBuy() ? "買入" : "賣出", o.getLimitPrice(), o.getShares(), o.getStatus(), o.getCommission(), o.getTax(), o.getTotalSettlementAmount());
+            }
+            pw.println("=========================================================================");
+            pw.println("匯出時間: " + java.time.LocalDateTime.now());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void exportListToPdf(File file, List <Order> orders) {
+        exportListToTxt(file, orders);
+    }
+
+    public void refreshHistoryAndSettlementUI() {
+        // 1. 刷新可用現金
+        if (lblAvailableCashValue != null) {
+            lblAvailableCashValue.setText(String.format("$ %,.2f", user.getCash()));
+        }
+
+        // 2. 刷新未來交割排程表
+        if (settlementScheduleTable != null && user.getSettlementManager() != null) {
+            observableSettlements.clear(); // 清空舊排程
+
+            Queue <SettlementManager.Settlement> currentQueue = user.getSettlementManager().getSettlementQueue();
+            if (currentQueue != null) {
+                observableSettlements.addAll(currentQueue);
+            }
+        }
+
+        // 3. 刷新歷史委託清單與現有計數 Label
+        if (historyOrderTable != null && tradingEngine != null) {
+            observableHistoryOrders.clear();
+            List <Order> historyList = tradingEngine.getHistoryOrders();
+            if (historyList != null) {
+                observableHistoryOrders.addAll(historyList);
+                lblHistoryCount.setText(String.format("現有紀錄: %d / 100 筆", historyList.size()));
+            }
+        }
     }
 
     public static void startApp(String[] args) {
