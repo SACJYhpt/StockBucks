@@ -36,7 +36,7 @@ public class WelcomeUI {
     private void initUI() {
         ImageView backgroundView = new ImageView();
         try {
-            String imagePath = getClass().getResource("/com/stockbucks/gui/stonks-meme.gif").toExternalForm();
+            String imagePath = getClass().getResource("stonks-meme.gif").toExternalForm();
             backgroundView.setImage(new Image(imagePath));
         } catch (Exception e) {
             System.out.println("暫時找不到 GIF 背景圖，將使用純色備用背景。");
