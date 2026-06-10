@@ -11,14 +11,12 @@
   <p align="center">
     一款多功能的股市模擬交易系統
     <br />
-    <a href="https://github.com/SACJYhpt/StockBucks"><strong>Explore the docs »</strong></a>
     <br />
-    <br />
-    <a href="https://github.com/othneildrew/Best-README-Template">View Demo</a>
+    <a href="https://youtu.be/J1qksTC9wtE">Demo Video</a>
     &middot;
-    <a href="https://github.com/othneildrew/Best-README-Template/issues/new?labels=bug&template=bug-report---.md">Report Bug</a>
+    <a href="https://docs.google.com/presentation/d/149NZ8hE4oVvkiBenGghfPWAS2RPeTiZXhdcEhO2shQs/edit?slide=id.p1#slide=id.p1">Report PPT</a>
     &middot;
-    <a href="https://github.com/othneildrew/Best-README-Template/issues/new?labels=enhancement&template=feature-request---.md">Request Feature</a>
+    <a href="https://github.com/SACJYhpt/StockBucks">Explore Files</a>
   </p>
 </div>
 
@@ -72,9 +70,6 @@
 
 同時體驗時間複利的威力、建立進出場限制與紀律
 
-
-
-Use the `BLANK_README.md` to get started.
 
 <p align="right">(<a href="#readmeTop">回到頂端</a>)</p>
 
