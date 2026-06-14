@@ -279,6 +279,18 @@ public class AIHub {
         return askAi(buildPrompt("回答使用者的股票問題。", stockId, currentPrice, historyData, question));
     }
 
+    public String answerStockQuestion(String stockId, String question) {
+        String normalizedStockId = stockId == null || stockId.isBlank() ? "2330" : stockId.trim();
+        StockQuote quote = fetchStockQuote(normalizedStockId);
+        double currentPrice = quote == null ? 0 : quote.getLastPrice();
+        List<StockData> history = fetchStockHistory(normalizedStockId, LocalDate.now().minusDays(30), LocalDate.now());
+        return askAi(buildPrompt("回答使用者的股票問題。", normalizedStockId, currentPrice, history, question));
+    }
+
+    public String askGeneralAi(String question) {
+        return askAi(question == null || question.isBlank() ? "請用繁體中文簡短回覆目前 AI 可以使用。" : question);
+    }
+
     public String analyzeCurrentMarket(User user,
                                        TradingEngine tradingEngine,
                                        List<StockData> historyData,

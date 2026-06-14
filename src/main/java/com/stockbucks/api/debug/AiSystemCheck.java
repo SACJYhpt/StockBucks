@@ -49,12 +49,15 @@ public final class AiSystemCheck {
         } else if (args.length >= 2 && "intraday".equalsIgnoreCase(args[0])) {
             String interval = args.length >= 3 ? args[2] : "1m";
             printIntraday(hub, args[1], interval);
+        } else if (args.length >= 3 && "stockai".equalsIgnoreCase(args[0])) {
+            printStockAi(hub, args[1], joinArgs(args, 2));
         } else {
             printTitle("測試方式");
             System.out.println("測即時報價：quote 2330");
             System.out.println("測歷史來源：history 2330");
             System.out.println("測盤中 K 線：intraday 2330 1m");
             System.out.println("測 AI 來源：ai ollama");
+            System.out.println("測股票 AI：stockai 2330 請分析這檔股票");
         }
     }
 
@@ -98,16 +101,18 @@ public final class AiSystemCheck {
         }
 
         System.out.println();
-        System.out.println("合併後筆數：" + hub.fetchStockHistory(stockId, fromDate, toDate).size());
+        int mergedCount = hub.fetchStockHistory(stockId, fromDate, toDate).size();
+        String mergedProvider = hub.getLastStockProviderUsed();
+        String mergedReason = hub.getLastStockFallbackReason();
+        System.out.println("合併後筆數：" + mergedCount);
+        System.out.println("合併來源：" + mergedProvider);
+        if (mergedReason != null && !mergedReason.isBlank()) {
+            System.out.println("未使用來源狀態：" + mergedReason);
+        }
         System.out.println("日期調整：" + hub.describeHistoryDateAdjustment(fromDate, toDate));
         System.out.println("今天是否可能開盤：" + (hub.isPotentialTradingDay(toDate) ? "是" : "否，會自動跳過"));
         LocalDate availableDate = hub.resolveAvailableHistoryDate(stockId, toDate);
         System.out.println("最近可用交易日：" + (availableDate == null ? "找不到" : availableDate));
-        System.out.println("合併來源：" + hub.getLastStockProviderUsed());
-        String reason = hub.getLastStockFallbackReason();
-        if (reason != null && !reason.isBlank()) {
-            System.out.println("未使用來源狀態：" + reason);
-        }
     }
 
     private static void printIntraday(AIHub hub, String stockId, String interval) {
@@ -128,6 +133,22 @@ public final class AiSystemCheck {
         if (reason != null && !reason.isBlank()) {
             System.out.println("fallback 狀態：" + reason);
         }
+    }
+
+    private static void printStockAi(AIHub hub, String stockId, String question) {
+        printTitle("股票 AI 測試：" + stockId);
+        System.out.println(hub.answerStockQuestion(stockId, question));
+    }
+
+    private static String joinArgs(String[] args, int startIndex) {
+        StringBuilder text = new StringBuilder();
+        for (int i = startIndex; i < args.length; i++) {
+            if (!text.isEmpty()) {
+                text.append(' ');
+            }
+            text.append(args[i]);
+        }
+        return text.toString();
     }
 
     private static void printTitle(String title) {

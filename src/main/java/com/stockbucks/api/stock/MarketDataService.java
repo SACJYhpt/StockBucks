@@ -124,10 +124,14 @@ public class MarketDataService {
             attempts = fetchMissingHistoryAttempts(stockId, adjustedFromDate, adjustedToDate, cached);
         }
         List<StockData> merged = mergeHistoryRows(cached, mergeHistoryAttempts(attempts));
-        lastProviderUsed = historyProviderSummary(attempts);
+        String fetchedProviders = historyProviderSummary(attempts);
+        lastProviderUsed = cached.isEmpty()
+                ? fetchedProviders
+                : "cache(" + cached.size() + ")" + (fetchedProviders.isBlank() ? "" : "+" + fetchedProviders);
+        String fallbackSummary = historyFallbackSummary(attempts);
         lastFallbackReason = describeHistoryDateAdjustment(fromDate, toDate)
                 + (cached.isEmpty() ? "" : " 已先使用本地快取 " + cached.size() + " 筆，只補抓缺少區間。")
-                + historyFallbackSummary(attempts);
+                + (fallbackSummary.isBlank() ? "" : " 補抓狀態：" + fallbackSummary);
         cache.putHistory(stockId, adjustedFromDate, adjustedToDate, merged);
         return merged;
     }
@@ -676,7 +680,7 @@ public class MarketDataService {
         if ("web".equals(provider)) return "near-realtime";
         if ("twse".equals(provider)) return "daily";
         if ("tpex".equals(provider)) return "daily";
-        if ("finmind".equals(provider)) return "daily";
+        if ("finmind".equals(provider)) return "near-realtime/daily";
         if ("local".equals(provider)) return "local";
         return "";
     }

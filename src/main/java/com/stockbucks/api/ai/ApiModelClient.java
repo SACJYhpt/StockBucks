@@ -313,7 +313,7 @@ public class ApiModelClient implements ModelClient {
             case "gemini", "google" -> EnvironmentConfig.first("", "GEMINI_API_KEY", "GOOGLE_API_KEY", "STOCKBUCKS_GEMINI_API_KEY", "AI_API_KEY");
             case "openrouter" -> EnvironmentConfig.first("", "OPENROUTER_API_KEY", "STOCKBUCKS_OPENROUTER_API_KEY", "AI_API_KEY");
             case "ollama", "local" -> "";
-            case "openai-compatible", "compatible", "chat-completions" -> EnvironmentConfig.first("", "AI_API_KEY", "STOCKBUCKS_AI_API_KEY");
+            case "openai-compatible", "compatible", "chat-completions" -> EnvironmentConfig.first("", "AI_API_KEY", "STOCKBUCKS_AI_API_KEY", "LOCAL_AI_API_KEY");
             default -> EnvironmentConfig.first("", "OPENAI_API_KEY", "STOCKBUCKS_OPENAI_API_KEY", "AI_API_KEY");
         };
     }
